@@ -3,7 +3,7 @@ node_modules
 .pnp
 .pnp.js
 
-# Build output
+# Build output — dist/ is the local build, docs/ is committed for Pages
 dist
 dist-ssr
 build
