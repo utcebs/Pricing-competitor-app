@@ -28,13 +28,13 @@ export default function Categories() {
     const children = byParent.get(parentKey) || []
     return children.map(c => (
       <div key={c.id}>
-        <div className={`flex items-center justify-between py-2 px-2 rounded hover:bg-slate-50 ${depth > 0 ? 'border-l-2 border-slate-100' : ''}`}
+        <div className={`flex items-center justify-between py-2 px-2 rounded hover:bg-canvas-100 ${depth > 0 ? 'border-l-2 border-ink-100' : ''}`}
              style={{ paddingLeft: `${depth * 20 + 8}px` }}>
-          <div className="text-sm text-slate-800">{c.name}</div>
+          <div className="text-sm text-ink-800">{c.name}</div>
           {isManager && (
             <div className="flex items-center gap-1">
-              <button onClick={() => setEditing(c)} className="p-1 rounded text-slate-400 hover:text-brand-600"><Pencil size={13} /></button>
-              <button onClick={() => setToDelete(c)} className="p-1 rounded text-slate-400 hover:text-red-600"><Trash2 size={13} /></button>
+              <button onClick={() => setEditing(c)} className="p-1 rounded text-ink-400 hover:text-brand-600"><Pencil size={13} /></button>
+              <button onClick={() => setToDelete(c)} className="p-1 rounded text-ink-400 hover:text-red-600"><Trash2 size={13} /></button>
             </div>
           )}
         </div>
@@ -128,7 +128,7 @@ function CategoryForm({ open, category, allCategories, onClose, onSaved }) {
         </Field>
       </div>
       {err && <div className="mt-4 text-sm text-red-600">{err}</div>}
-      <div className="flex justify-end gap-2 mt-6 pt-4 border-t border-slate-100">
+      <div className="flex justify-end gap-2 mt-6 pt-4 border-t border-ink-100">
         <Button variant="secondary" onClick={onClose}>Cancel</Button>
         <Button busy={busy} onClick={submit}>{isNew ? 'Create' : 'Save'}</Button>
       </div>

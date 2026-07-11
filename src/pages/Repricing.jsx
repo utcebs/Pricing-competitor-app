@@ -45,7 +45,7 @@ export default function Repricing() {
         action={isManager && <Button onClick={() => setEditing({})}><Plus size={15} /> New rule</Button>}
       />
 
-      <div className="text-xs text-slate-500 mb-4 p-3 bg-amber-50 border border-amber-100 rounded-lg">
+      <div className="text-xs text-ink-500 mb-4 p-3 bg-amber-50 border border-amber-100 rounded-lg">
         <AlertCircle size={13} className="inline mr-1.5 text-amber-600 -mt-0.5" />
         The rule engine runs on the scraper worker after each price fetch. Approved proposals
         are pushed to Dynamics 365 (or your configured integration) automatically.
@@ -55,7 +55,7 @@ export default function Repricing() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div>
-          <h2 className="text-sm font-semibold text-slate-800 mb-2">Rules</h2>
+          <h2 className="text-sm font-semibold text-ink-800 mb-2">Rules</h2>
           <Card>
             {loading ? <LoadingBlock /> : rules.length === 0 ? (
               <Empty
@@ -65,12 +65,12 @@ export default function Repricing() {
                 action={isManager && <Button onClick={() => setEditing({})}><Plus size={15} /> First rule</Button>}
               />
             ) : (
-              <div className="divide-y divide-slate-100">
+              <div className="divide-y divide-ink-100">
                 {rules.map(r => (
-                  <div key={r.id} className="p-4 hover:bg-slate-50 flex items-start justify-between gap-4">
+                  <div key={r.id} className="p-4 hover:bg-canvas-100 flex items-start justify-between gap-4">
                     <div className="flex-1 min-w-0">
-                      <div className="font-medium text-slate-900">{r.name}</div>
-                      <div className="text-xs text-slate-500 mt-1">
+                      <div className="font-medium text-ink-900">{r.name}</div>
+                      <div className="text-xs text-ink-500 mt-1">
                         {STRATEGIES.find(s => s.value === r.strategy)?.label || r.strategy}
                         {r.strategy_value != null && ` (${r.strategy_value})`}
                       </div>
@@ -79,12 +79,12 @@ export default function Repricing() {
                         <Badge variant={r.auto_apply ? 'brand' : 'amber'}>
                           {r.auto_apply ? 'Auto-apply' : 'Proposal → approve'}
                         </Badge>
-                        <span className="text-[10px] text-slate-400">Priority {r.priority}</span>
+                        <span className="text-[10px] text-ink-400">Priority {r.priority}</span>
                       </div>
                     </div>
                     <div className="flex items-center gap-1">
-                      <button onClick={() => setEditing(r)} className="p-1.5 rounded text-slate-400 hover:text-brand-600 hover:bg-brand-50"><Pencil size={14} /></button>
-                      <button onClick={() => setToDelete(r)} className="p-1.5 rounded text-slate-400 hover:text-red-600 hover:bg-red-50"><Trash2 size={14} /></button>
+                      <button onClick={() => setEditing(r)} className="p-1.5 rounded text-ink-400 hover:text-brand-600 hover:bg-brand-50"><Pencil size={14} /></button>
+                      <button onClick={() => setToDelete(r)} className="p-1.5 rounded text-ink-400 hover:text-red-600 hover:bg-red-50"><Trash2 size={14} /></button>
                     </div>
                   </div>
                 ))}
@@ -94,7 +94,7 @@ export default function Repricing() {
         </div>
 
         <div>
-          <h2 className="text-sm font-semibold text-slate-800 mb-2">Pending proposals ({proposals.length})</h2>
+          <h2 className="text-sm font-semibold text-ink-800 mb-2">Pending proposals ({proposals.length})</h2>
           <Card>
             {proposals.length === 0 ? (
               <Empty
@@ -103,7 +103,7 @@ export default function Repricing() {
                 description="Rules fire whenever competitor prices update. Any change waiting on your approval will appear here."
               />
             ) : (
-              <div className="divide-y divide-slate-100">
+              <div className="divide-y divide-ink-100">
                 {proposals.map(p => (
                   <ProposalRow key={p.id} proposal={p} products={products} onDecided={refreshProposals} />
                 ))}
@@ -161,14 +161,14 @@ function ProposalRow({ proposal, products, onDecided }) {
     <div className="p-4 flex items-center justify-between gap-4">
       <div className="flex-1 min-w-0">
         <div className="text-sm font-medium">{p?.name || `Product ${proposal.product_id}`}</div>
-        <div className="text-xs text-slate-500 mt-0.5 flex items-center gap-2">
+        <div className="text-xs text-ink-500 mt-0.5 flex items-center gap-2">
           <span className="tabular-nums">{Number(proposal.current_price ?? 0).toFixed(3)}</span>
           <ArrowRight size={11} />
           <span className="tabular-nums font-semibold text-brand-700">
             {Number(proposal.suggested_price).toFixed(3)}
           </span>
         </div>
-        {proposal.reason && <div className="text-[11px] text-slate-500 mt-1">{proposal.reason}</div>}
+        {proposal.reason && <div className="text-[11px] text-ink-500 mt-1">{proposal.reason}</div>}
       </div>
       <div className="flex flex-col gap-1 shrink-0">
         <Button size="sm" variant="primary" busy={busy === 'approved'} onClick={() => decide('approved')}>
@@ -264,7 +264,7 @@ function RuleForm({ open, rule, products, categories, onClose, onSaved }) {
         </div>
       </div>
       {err && <div className="mt-4 text-sm text-red-600">{err}</div>}
-      <div className="flex justify-end gap-2 mt-6 pt-4 border-t border-slate-100">
+      <div className="flex justify-end gap-2 mt-6 pt-4 border-t border-ink-100">
         <Button variant="secondary" onClick={onClose}>Cancel</Button>
         <Button busy={busy} onClick={submit}>{isNew ? 'Create' : 'Save'}</Button>
       </div>

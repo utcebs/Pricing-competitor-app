@@ -1,3 +1,4 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&display=swap');
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -6,15 +7,49 @@
   color-scheme: light;
 }
 
-body {
-  font-family: 'Inter', system-ui, sans-serif;
-  background: #f8fafc;
-  color: #0f172a;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+html, body {
+  height: 100%;
 }
 
-/* Numeric tabular figures for price columns — keeps decimals aligned. */
-.tabular-nums {
-  font-variant-numeric: tabular-nums;
+body {
+  font-family: 'Inter', system-ui, sans-serif;
+  background: #faf9f7;
+  color: #0c0a09;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11', 'ss01';
 }
+
+/* Refined serif for hero titles and the wordmark. */
+.font-display {
+  font-family: 'Fraunces', Georgia, serif;
+  font-optical-sizing: auto;
+  letter-spacing: -0.02em;
+}
+
+/* Numeric tabular figures for money & metric columns. */
+.tabular-nums { font-variant-numeric: tabular-nums; }
+
+/* Subtle grain — adds depth to large cream surfaces without being noisy. */
+.bg-grain {
+  background-image:
+    radial-gradient(rgba(28, 25, 23, 0.025) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+/* Scrollbar polish (light-mode only). */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: #d6d3d1;
+  border-radius: 8px;
+  border: 2px solid #faf9f7;
+}
+::-webkit-scrollbar-thumb:hover { background: #a8a29e; }
+
+/* Dark scrollbar for the sidebar. */
+aside::-webkit-scrollbar-thumb {
+  background: #292524;
+  border-color: #0c0a09;
+}
+aside::-webkit-scrollbar-thumb:hover { background: #44403c; }

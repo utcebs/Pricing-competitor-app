@@ -49,7 +49,7 @@ export default function Alerts() {
         action={<Button onClick={() => setEditing({})}><Plus size={15} /> New rule</Button>}
       />
 
-      <div className="text-xs text-slate-500 mb-4 p-3 bg-amber-50 border border-amber-100 rounded-lg">
+      <div className="text-xs text-ink-500 mb-4 p-3 bg-amber-50 border border-amber-100 rounded-lg">
         <AlertCircle size={13} className="inline mr-1.5 text-amber-600 -mt-0.5" />
         Email delivery requires a Resend API key configured on the alerts worker.
         Rules will be evaluated but not delivered until the worker is deployed.
@@ -68,15 +68,15 @@ export default function Alerts() {
                 action={<Button onClick={() => setEditing({})}><Plus size={15} /> New rule</Button>}
               />
             ) : (
-              <div className="divide-y divide-slate-100">
+              <div className="divide-y divide-ink-100">
                 {rules.map(r => {
                   const trigLabel = TRIGGERS.find(t => t.value === r.trigger)?.label || r.trigger
                   const scopeLabel = SCOPES.find(s => s.value === r.scope)?.label || r.scope
                   return (
-                    <div key={r.id} className="p-4 hover:bg-slate-50 flex items-start justify-between gap-4">
+                    <div key={r.id} className="p-4 hover:bg-canvas-100 flex items-start justify-between gap-4">
                       <div className="flex-1 min-w-0">
-                        <div className="font-medium text-slate-900">{r.name}</div>
-                        <div className="text-xs text-slate-500 mt-1">
+                        <div className="font-medium text-ink-900">{r.name}</div>
+                        <div className="text-xs text-ink-500 mt-1">
                           <span className="font-medium">{trigLabel}</span>
                           {r.threshold_pct != null && ` (${r.threshold_pct}%)`}
                           {' · '}
@@ -92,8 +92,8 @@ export default function Alerts() {
                         </div>
                       </div>
                       <div className="flex items-center gap-1">
-                        <button onClick={() => setEditing(r)} className="p-1.5 rounded text-slate-400 hover:text-brand-600 hover:bg-brand-50"><Pencil size={14} /></button>
-                        <button onClick={() => setToDelete(r)} className="p-1.5 rounded text-slate-400 hover:text-red-600 hover:bg-red-50"><Trash2 size={14} /></button>
+                        <button onClick={() => setEditing(r)} className="p-1.5 rounded text-ink-400 hover:text-brand-600 hover:bg-brand-50"><Pencil size={14} /></button>
+                        <button onClick={() => setToDelete(r)} className="p-1.5 rounded text-ink-400 hover:text-red-600 hover:bg-red-50"><Trash2 size={14} /></button>
                       </div>
                     </div>
                   )
@@ -105,15 +105,15 @@ export default function Alerts() {
 
         <div>
           <Card className="p-4">
-            <h3 className="text-sm font-semibold text-slate-800 mb-3">Recent deliveries</h3>
+            <h3 className="text-sm font-semibold text-ink-800 mb-3">Recent deliveries</h3>
             {deliveries.length === 0 ? (
-              <p className="text-xs text-slate-500 py-2">No alerts fired yet.</p>
+              <p className="text-xs text-ink-500 py-2">No alerts fired yet.</p>
             ) : (
               <div className="space-y-2">
                 {deliveries.slice(0, 10).map(d => (
-                  <div key={d.id} className="p-2 rounded bg-slate-50 text-xs">
-                    <div className="font-medium text-slate-800">{d.event || 'Event'}</div>
-                    <div className="text-slate-500 mt-0.5 flex items-center gap-2">
+                  <div key={d.id} className="p-2 rounded bg-canvas-100 text-xs">
+                    <div className="font-medium text-ink-800">{d.event || 'Event'}</div>
+                    <div className="text-ink-500 mt-0.5 flex items-center gap-2">
                       <Badge variant={d.delivery_status === 'sent' ? 'green' : d.delivery_status === 'failed' ? 'red' : 'slate'}>
                         {d.delivery_status}
                       </Badge>
@@ -227,13 +227,13 @@ function AlertForm({ open, rule, products, categories, competitors, userId, onCl
             <option value="digest">Daily digest (one email at 9 AM)</option>
           </select>
         </Field>
-        <label className="inline-flex items-center gap-2 text-sm text-slate-700">
+        <label className="inline-flex items-center gap-2 text-sm text-ink-700">
           <input type="checkbox" checked={form.is_active !== false} onChange={e => set('is_active', e.target.checked)} />
           Active
         </label>
       </div>
       {err && <div className="mt-4 text-sm text-red-600">{err}</div>}
-      <div className="flex justify-end gap-2 mt-6 pt-4 border-t border-slate-100">
+      <div className="flex justify-end gap-2 mt-6 pt-4 border-t border-ink-100">
         <Button variant="secondary" onClick={onClose}>Cancel</Button>
         <Button busy={busy} onClick={submit}>{isNew ? 'Create' : 'Save'}</Button>
       </div>

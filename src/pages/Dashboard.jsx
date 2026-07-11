@@ -133,12 +133,12 @@ export default function Dashboard() {
 function StatCard({ widget, value }) {
   const Icon = widget.icon
   return (
-    <div className="bg-white border border-slate-200 rounded-2xl p-5 hover:shadow-md transition-all">
+    <div className="bg-white border border-ink-200 rounded-2xl p-5 hover:shadow-md transition-all">
       <div className="flex items-center justify-between mb-3">
-        <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-600">{widget.label}</span>
-        <Icon size={18} className="text-slate-400" />
+        <span className="text-[10px] font-semibold uppercase tracking-widest text-ink-600">{widget.label}</span>
+        <Icon size={18} className="text-ink-400" />
       </div>
-      <div className="text-3xl font-bold text-slate-900 tabular-nums">{value}</div>
+      <div className="text-3xl font-bold text-ink-900 tabular-nums">{value}</div>
     </div>
   )
 }
@@ -147,22 +147,22 @@ function RecentPricesPanel({ recent }) {
   return (
     <div className="lg:col-span-2">
       <Card className="p-6">
-        <h3 className="text-sm font-semibold text-slate-800 mb-4">Recent price snapshots</h3>
+        <h3 className="text-sm font-semibold text-ink-800 mb-4">Recent price snapshots</h3>
         {recent.length === 0 ? (
-          <p className="text-sm text-slate-500 py-4">
+          <p className="text-sm text-ink-500 py-4">
             No prices logged yet. <Link to="/prices/new" className="text-brand-600 hover:underline">Log the first one →</Link>
           </p>
         ) : (
-          <div className="divide-y divide-slate-100">
+          <div className="divide-y divide-ink-100">
             {recent.map(r => (
               <div key={r.id} className="flex items-center justify-between py-2.5 text-sm">
                 <div>
-                  <div className="font-medium text-slate-800">{r.competitor_products?.name || 'Untitled'}</div>
-                  <div className="text-xs text-slate-500">
+                  <div className="font-medium text-ink-800">{r.competitor_products?.name || 'Untitled'}</div>
+                  <div className="text-xs text-ink-500">
                     {r.competitor_products?.competitors?.name || '—'} · {new Date(r.captured_at).toLocaleString()}
                   </div>
                 </div>
-                <div className="tabular-nums font-medium text-slate-900">
+                <div className="tabular-nums font-medium text-ink-900">
                   {r.currency_code} {Number(r.price).toFixed(3)}
                 </div>
               </div>
@@ -177,7 +177,7 @@ function RecentPricesPanel({ recent }) {
 function QuickActionsPanel() {
   return (
     <Card className="p-6">
-      <h3 className="text-sm font-semibold text-slate-800 mb-4">Quick actions</h3>
+      <h3 className="text-sm font-semibold text-ink-800 mb-4">Quick actions</h3>
       <div className="space-y-2">
         <QuickLink to="/products" label="Add a product" icon={Package} />
         <QuickLink to="/competitors" label="Add a competitor" icon={Building2} />
@@ -192,10 +192,10 @@ function QuickActionsPanel() {
 
 function QuickLink({ to, label, icon: Icon }) {
   return (
-    <Link to={to} className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-slate-50 transition-colors group">
-      <Icon size={14} className="text-slate-400 group-hover:text-brand-600" />
-      <span className="text-sm text-slate-800 group-hover:text-brand-700 font-medium">{label}</span>
-      <span className="ml-auto text-slate-400 group-hover:text-brand-600">→</span>
+    <Link to={to} className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-canvas-100 transition-colors group">
+      <Icon size={14} className="text-ink-400 group-hover:text-brand-600" />
+      <span className="text-sm text-ink-800 group-hover:text-brand-700 font-medium">{label}</span>
+      <span className="ml-auto text-ink-400 group-hover:text-brand-600">→</span>
     </Link>
   )
 }
@@ -203,8 +203,8 @@ function QuickLink({ to, label, icon: Icon }) {
 function RoadmapPanel() {
   return (
     <Card className="p-6">
-      <div className="text-[10px] font-semibold uppercase tracking-widest text-slate-500 mb-2">All phases</div>
-      <div className="space-y-1 text-xs text-slate-600">
+      <div className="text-[10px] font-semibold uppercase tracking-widest text-ink-500 mb-2">All phases</div>
+      <div className="space-y-1 text-xs text-ink-600">
         {[
           ['1', 'MVP · manual entry'],
           ['2', 'Playwright scrapers'],
@@ -214,11 +214,11 @@ function RoadmapPanel() {
         ].map(([n, label]) => (
           <div key={n} className="flex items-center gap-2">
             <div className="w-5 h-5 rounded flex items-center justify-center text-[9px] font-bold bg-emerald-100 text-emerald-700">✓</div>
-            <span className="text-slate-800">{label}</span>
+            <span className="text-ink-800">{label}</span>
           </div>
         ))}
       </div>
-      <div className="text-[10px] text-slate-500 mt-3 pt-3 border-t border-slate-100">
+      <div className="text-[10px] text-ink-500 mt-3 pt-3 border-t border-ink-100">
         Worker deploys separately — see <code>worker/README.md</code>.
       </div>
     </Card>
@@ -239,7 +239,7 @@ function CustomizeDialog({ open, onClose, current, onSave }) {
   }
   return (
     <Modal open={open} onClose={onClose} title="Customize dashboard" wide>
-      <p className="text-xs text-slate-500 mb-4">
+      <p className="text-xs text-ink-500 mb-4">
         Toggle widgets on/off and use ↑↓ to reorder. Changes save to your profile.
       </p>
       <div className="space-y-2">
@@ -247,24 +247,24 @@ function CustomizeDialog({ open, onClose, current, onSave }) {
           const on = selected.includes(w.id)
           const pos = selected.indexOf(w.id)
           return (
-            <div key={w.id} className="flex items-center gap-3 p-3 border border-slate-200 rounded-lg">
+            <div key={w.id} className="flex items-center gap-3 p-3 border border-ink-200 rounded-lg">
               <button onClick={() => toggle(w.id)}
-                className={`w-6 h-6 rounded flex items-center justify-center ${on ? 'bg-brand-600 text-white' : 'bg-slate-100 text-slate-400'}`}>
+                className={`w-6 h-6 rounded flex items-center justify-center ${on ? 'bg-brand-600 text-white' : 'bg-ink-100 text-ink-400'}`}>
                 {on ? <Check size={13} /> : <XIcon size={13} />}
               </button>
-              <span className="text-[10px] uppercase tracking-widest text-slate-400 w-14">{w.kind}</span>
+              <span className="text-[10px] uppercase tracking-widest text-ink-400 w-14">{w.kind}</span>
               <div className="flex-1 text-sm">{w.label}</div>
               {on && (
                 <div className="flex items-center gap-1">
-                  <button onClick={() => move(w.id, -1)} disabled={pos <= 0} className="text-xs text-slate-500 hover:text-slate-800 disabled:opacity-30 px-1.5">↑</button>
-                  <button onClick={() => move(w.id, 1)}  disabled={pos >= selected.length - 1} className="text-xs text-slate-500 hover:text-slate-800 disabled:opacity-30 px-1.5">↓</button>
+                  <button onClick={() => move(w.id, -1)} disabled={pos <= 0} className="text-xs text-ink-500 hover:text-ink-800 disabled:opacity-30 px-1.5">↑</button>
+                  <button onClick={() => move(w.id, 1)}  disabled={pos >= selected.length - 1} className="text-xs text-ink-500 hover:text-ink-800 disabled:opacity-30 px-1.5">↓</button>
                 </div>
               )}
             </div>
           )
         })}
       </div>
-      <div className="flex justify-end gap-2 mt-6 pt-4 border-t border-slate-100">
+      <div className="flex justify-end gap-2 mt-6 pt-4 border-t border-ink-100">
         <Button variant="secondary" onClick={onClose}>Cancel</Button>
         <Button onClick={() => onSave({ widgets: selected })}>Save</Button>
       </div>

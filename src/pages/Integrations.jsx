@@ -82,7 +82,7 @@ export default function Integrations() {
         action={isManager && <Button onClick={() => setEditing({})}><Plus size={15} /> Add integration</Button>}
       />
 
-      <div className="text-xs text-slate-500 mb-4 p-3 bg-amber-50 border border-amber-100 rounded-lg">
+      <div className="text-xs text-ink-500 mb-4 p-3 bg-amber-50 border border-amber-100 rounded-lg">
         <AlertCircle size={13} className="inline mr-1.5 text-amber-600 -mt-0.5" />
         Adding an integration only stores credentials. The actual sync workers (that call Dynamics
         365 / Shopify / etc. APIs) run on the scraper worker deployment.
@@ -102,28 +102,28 @@ export default function Integrations() {
                 action={isManager && <Button onClick={() => setEditing({})}><Plus size={15} /> Add first</Button>}
               />
             ) : (
-              <div className="divide-y divide-slate-100">
+              <div className="divide-y divide-ink-100">
                 {rows.map(r => {
                   const kind = KINDS.find(k => k.value === r.kind)
                   return (
                     <div key={r.id} className="p-4 flex items-start justify-between gap-4">
                       <div className="flex-1 min-w-0">
-                        <div className="text-sm font-medium text-slate-900">{r.name}</div>
-                        <div className="text-xs text-slate-500 mt-0.5">{kind?.label || r.kind}</div>
+                        <div className="text-sm font-medium text-ink-900">{r.name}</div>
+                        <div className="text-xs text-ink-500 mt-0.5">{kind?.label || r.kind}</div>
                         <div className="flex items-center gap-2 mt-2">
                           <Badge variant={r.is_active ? 'green' : 'slate'}>
                             {r.is_active ? 'Active' : 'Paused'}
                           </Badge>
                           {r.last_sync_at && (
-                            <span className="text-[10px] text-slate-400">
+                            <span className="text-[10px] text-ink-400">
                               Last sync: {new Date(r.last_sync_at).toLocaleString()}
                             </span>
                           )}
                         </div>
                       </div>
                       <div className="flex items-center gap-1">
-                        <button onClick={() => setEditing(r)} className="p-1.5 rounded text-slate-400 hover:text-brand-600 hover:bg-brand-50"><Pencil size={14} /></button>
-                        <button onClick={() => setToDelete(r)} className="p-1.5 rounded text-slate-400 hover:text-red-600 hover:bg-red-50"><Trash2 size={14} /></button>
+                        <button onClick={() => setEditing(r)} className="p-1.5 rounded text-ink-400 hover:text-brand-600 hover:bg-brand-50"><Pencil size={14} /></button>
+                        <button onClick={() => setToDelete(r)} className="p-1.5 rounded text-ink-400 hover:text-red-600 hover:bg-red-50"><Trash2 size={14} /></button>
                       </div>
                     </div>
                   )
@@ -136,15 +136,15 @@ export default function Integrations() {
         <div>
           <Card className="p-4">
             <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-semibold text-slate-800">Recent sync activity</h3>
-              <button onClick={refresh} className="text-slate-400 hover:text-slate-700"><RefreshCw size={14} /></button>
+              <h3 className="text-sm font-semibold text-ink-800">Recent sync activity</h3>
+              <button onClick={refresh} className="text-ink-400 hover:text-ink-700"><RefreshCw size={14} /></button>
             </div>
             {syncLog.length === 0 ? (
-              <p className="text-xs text-slate-500">No syncs recorded yet.</p>
+              <p className="text-xs text-ink-500">No syncs recorded yet.</p>
             ) : (
               <div className="space-y-2 max-h-[500px] overflow-y-auto">
                 {syncLog.map(l => (
-                  <div key={l.id} className="p-2 rounded bg-slate-50 text-xs">
+                  <div key={l.id} className="p-2 rounded bg-canvas-100 text-xs">
                     <div className="flex items-center justify-between">
                       <span className="font-medium capitalize">{l.operation?.replace('_', ' ')}</span>
                       <Badge variant={l.status === 'ok' ? 'green' : l.status === 'failed' ? 'red' : 'amber'}>
@@ -153,7 +153,7 @@ export default function Integrations() {
                         {l.status}
                       </Badge>
                     </div>
-                    <div className="text-slate-500 mt-0.5">
+                    <div className="text-ink-500 mt-0.5">
                       {new Date(l.created_at).toLocaleString()}
                       {l.duration_ms != null && ` · ${l.duration_ms}ms`}
                     </div>
@@ -224,7 +224,7 @@ function IntegrationForm({ open, integration, onClose, onSaved }) {
           <input className={inputCls} value={form.name || ''} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} />
         </Field>
         <div className="md:col-span-2">
-          <div className="text-xs text-slate-500 mb-2">
+          <div className="text-xs text-ink-500 mb-2">
             <ExternalLink size={11} className="inline mr-1" />
             <a href={kind.docs} target="_blank" rel="noopener noreferrer" className="text-brand-600 hover:underline">
               Docs for {kind.label}
@@ -250,7 +250,7 @@ function IntegrationForm({ open, integration, onClose, onSaved }) {
         </div>
       </div>
       {err && <div className="mt-4 text-sm text-red-600">{err}</div>}
-      <div className="flex justify-end gap-2 mt-6 pt-4 border-t border-slate-100">
+      <div className="flex justify-end gap-2 mt-6 pt-4 border-t border-ink-100">
         <Button variant="secondary" onClick={onClose}>Cancel</Button>
         <Button busy={busy} onClick={submit}>{isNew ? 'Create' : 'Save'}</Button>
       </div>

@@ -42,15 +42,15 @@ export default function Competitors() {
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full">
-              <thead className="bg-slate-50 border-b border-slate-200">
+              <thead className="bg-canvas-100 border-b border-ink-200">
                 <tr>
                   <Th>Name</Th><Th>Domain</Th><Th>Country</Th><Th>Status</Th>
                   {isManager && <Th></Th>}
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody className="divide-y divide-ink-100">
                 {competitors.map(c => (
-                  <tr key={c.id} className="hover:bg-slate-50">
+                  <tr key={c.id} className="hover:bg-canvas-100">
                     <Td className="font-medium">{c.name}</Td>
                     <Td>
                       <a href={`https://${c.domain}`} target="_blank" rel="noopener noreferrer"
@@ -58,13 +58,13 @@ export default function Competitors() {
                         {c.domain} <ExternalLink size={11} />
                       </a>
                     </Td>
-                    <Td className="text-slate-500 text-xs uppercase">{c.country || '—'}</Td>
+                    <Td className="text-ink-500 text-xs uppercase">{c.country || '—'}</Td>
                     <Td>{c.is_active ? <Badge variant="green">Active</Badge> : <Badge>Inactive</Badge>}</Td>
                     {isManager && (
                       <Td>
                         <div className="flex items-center gap-1">
-                          <button onClick={() => setEditing(c)} className="p-1.5 rounded text-slate-400 hover:text-brand-600 hover:bg-brand-50"><Pencil size={14} /></button>
-                          <button onClick={() => setToDelete(c)} className="p-1.5 rounded text-slate-400 hover:text-red-600 hover:bg-red-50"><Trash2 size={14} /></button>
+                          <button onClick={() => setEditing(c)} className="p-1.5 rounded text-ink-400 hover:text-brand-600 hover:bg-brand-50"><Pencil size={14} /></button>
+                          <button onClick={() => setToDelete(c)} className="p-1.5 rounded text-ink-400 hover:text-red-600 hover:bg-red-50"><Trash2 size={14} /></button>
                         </div>
                       </Td>
                     )}
@@ -182,7 +182,7 @@ function CompetitorForm({ open, competitor, onClose, onSaved }) {
           <input className={inputCls} value={form.country || ''} onChange={e => set('country', e.target.value.toUpperCase())} maxLength={2} />
         </Field>
         <div className="flex items-center pt-6">
-          <label className="inline-flex items-center gap-2 text-sm text-slate-700">
+          <label className="inline-flex items-center gap-2 text-sm text-ink-700">
             <input type="checkbox" checked={form.is_active !== false} onChange={e => set('is_active', e.target.checked)} />
             Active
           </label>
@@ -205,7 +205,7 @@ function CompetitorForm({ open, competitor, onClose, onSaved }) {
         </div>
       </div>
       {err && <div className="mt-4 text-sm text-red-600">{err}</div>}
-      <div className="flex justify-end gap-2 mt-6 pt-4 border-t border-slate-100">
+      <div className="flex justify-end gap-2 mt-6 pt-4 border-t border-ink-100">
         <Button variant="secondary" onClick={onClose}>Cancel</Button>
         <Button busy={busy} onClick={submit}>{isNew ? 'Create' : 'Save'}</Button>
       </div>
@@ -214,8 +214,8 @@ function CompetitorForm({ open, competitor, onClose, onSaved }) {
 }
 
 function Th({ children, className = '' }) {
-  return <th className={`px-4 py-2.5 text-left text-[10px] font-semibold text-slate-500 uppercase tracking-wider ${className}`}>{children}</th>
+  return <th className={`px-4 py-2.5 text-left text-[10px] font-semibold text-ink-500 uppercase tracking-wider ${className}`}>{children}</th>
 }
 function Td({ children, className = '' }) {
-  return <td className={`px-4 py-3 text-sm text-slate-700 ${className}`}>{children}</td>
+  return <td className={`px-4 py-3 text-sm text-ink-700 ${className}`}>{children}</td>
 }

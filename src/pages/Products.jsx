@@ -54,7 +54,7 @@ export default function Products() {
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full">
-              <thead className="bg-slate-50 border-b border-slate-200">
+              <thead className="bg-canvas-100 border-b border-ink-200">
                 <tr>
                   <Th>SKU</Th><Th>Name</Th><Th>Brand</Th><Th>Category</Th>
                   <Th className="text-right">Cost</Th>
@@ -64,17 +64,17 @@ export default function Products() {
                   {isManager && <Th></Th>}
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody className="divide-y divide-ink-100">
                 {products.map(p => (
-                  <tr key={p.id} className="hover:bg-slate-50">
+                  <tr key={p.id} className="hover:bg-canvas-100">
                     <Td className="font-mono text-xs">{p.sku}</Td>
                     <Td className="font-medium">{p.name}</Td>
-                    <Td className="text-slate-500">{p.brand || '—'}</Td>
-                    <Td className="text-slate-500">{catName(p.category_id)}</Td>
-                    <Td className="text-right tabular-nums text-slate-500">
+                    <Td className="text-ink-500">{p.brand || '—'}</Td>
+                    <Td className="text-ink-500">{catName(p.category_id)}</Td>
+                    <Td className="text-right tabular-nums text-ink-500">
                       {p.cost_price != null ? `${currencySymbol(p.currency_code)} ${Number(p.cost_price).toFixed(3)}` : '—'}
                     </Td>
-                    <Td className="text-right tabular-nums text-slate-500">
+                    <Td className="text-right tabular-nums text-ink-500">
                       {p.min_price != null ? `${currencySymbol(p.currency_code)} ${Number(p.min_price).toFixed(3)}` : '—'}
                     </Td>
                     <Td className="text-right tabular-nums font-medium">
@@ -84,8 +84,8 @@ export default function Products() {
                     {isManager && (
                       <Td>
                         <div className="flex items-center gap-1">
-                          <button onClick={() => openEdit(p)} className="p-1.5 rounded text-slate-400 hover:text-brand-600 hover:bg-brand-50"><Pencil size={14} /></button>
-                          <button onClick={() => setToDelete(p)} className="p-1.5 rounded text-slate-400 hover:text-red-600 hover:bg-red-50"><Trash2 size={14} /></button>
+                          <button onClick={() => openEdit(p)} className="p-1.5 rounded text-ink-400 hover:text-brand-600 hover:bg-brand-50"><Pencil size={14} /></button>
+                          <button onClick={() => setToDelete(p)} className="p-1.5 rounded text-ink-400 hover:text-red-600 hover:bg-red-50"><Trash2 size={14} /></button>
                         </div>
                       </Td>
                     )}
@@ -252,11 +252,11 @@ function ProductForm({ open, product, categories, currencies, onClose, onSaved }
           <input type="number" step="0.01" className={inputCls} value={form.target_margin ?? ''} onChange={e => set('target_margin', e.target.value)} />
         </Field>
         <div className="flex items-center gap-4 pt-6">
-          <label className="inline-flex items-center gap-2 text-sm text-slate-700">
+          <label className="inline-flex items-center gap-2 text-sm text-ink-700">
             <input type="checkbox" checked={!!form.is_own_brand} onChange={e => set('is_own_brand', e.target.checked)} />
             Own-brand item
           </label>
-          <label className="inline-flex items-center gap-2 text-sm text-slate-700">
+          <label className="inline-flex items-center gap-2 text-sm text-ink-700">
             <input type="checkbox" checked={form.is_active !== false} onChange={e => set('is_active', e.target.checked)} />
             Active
           </label>
@@ -270,7 +270,7 @@ function ProductForm({ open, product, categories, currencies, onClose, onSaved }
 
       {err && <div className="mt-4 text-sm text-red-600">{err}</div>}
 
-      <div className="flex justify-end gap-2 mt-6 pt-4 border-t border-slate-100">
+      <div className="flex justify-end gap-2 mt-6 pt-4 border-t border-ink-100">
         <Button variant="secondary" onClick={onClose}>Cancel</Button>
         <Button busy={busy} onClick={submit}>{isNew ? 'Create' : 'Save'}</Button>
       </div>
@@ -279,8 +279,8 @@ function ProductForm({ open, product, categories, currencies, onClose, onSaved }
 }
 
 function Th({ children, className = '' }) {
-  return <th className={`px-4 py-2.5 text-left text-[10px] font-semibold text-slate-500 uppercase tracking-wider ${className}`}>{children}</th>
+  return <th className={`px-4 py-2.5 text-left text-[10px] font-semibold text-ink-500 uppercase tracking-wider ${className}`}>{children}</th>
 }
 function Td({ children, className = '' }) {
-  return <td className={`px-4 py-3 text-sm text-slate-700 ${className}`}>{children}</td>
+  return <td className={`px-4 py-3 text-sm text-ink-700 ${className}`}>{children}</td>
 }

@@ -89,13 +89,13 @@ export default function MatchReview() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-2">
                       <Badge variant="amber">{Math.round(s.confidence * 100)}% match</Badge>
-                      <span className="text-xs text-slate-500 capitalize">via {s.method.replace('_', ' ')}</span>
+                      <span className="text-xs text-ink-500 capitalize">via {s.method.replace('_', ' ')}</span>
                     </div>
                     <div className="grid grid-cols-2 gap-4 text-sm">
                       <div>
-                        <div className="text-[10px] uppercase tracking-widest text-slate-400 mb-1">Competitor's product</div>
-                        <div className="font-medium text-slate-900">{cp?.name || `#${s.competitor_product_id}`}</div>
-                        <div className="text-xs text-slate-500 mt-0.5">{c?.name || '—'}</div>
+                        <div className="text-[10px] uppercase tracking-widest text-ink-400 mb-1">Competitor's product</div>
+                        <div className="font-medium text-ink-900">{cp?.name || `#${s.competitor_product_id}`}</div>
+                        <div className="text-xs text-ink-500 mt-0.5">{c?.name || '—'}</div>
                         {cp?.url && (
                           <a href={cp.url} target="_blank" rel="noopener noreferrer"
                              className="text-xs text-brand-600 hover:underline mt-1 block truncate">
@@ -104,9 +104,9 @@ export default function MatchReview() {
                         )}
                       </div>
                       <div>
-                        <div className="text-[10px] uppercase tracking-widest text-slate-400 mb-1">Your product</div>
-                        <div className="font-medium text-slate-900">{p?.name || `#${s.product_id}`}</div>
-                        <div className="text-xs text-slate-500 mt-0.5 font-mono">{p?.sku}</div>
+                        <div className="text-[10px] uppercase tracking-widest text-ink-400 mb-1">Your product</div>
+                        <div className="font-medium text-ink-900">{p?.name || `#${s.product_id}`}</div>
+                        <div className="text-xs text-ink-500 mt-0.5 font-mono">{p?.sku}</div>
                       </div>
                     </div>
                   </div>

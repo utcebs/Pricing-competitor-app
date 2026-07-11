@@ -53,8 +53,8 @@ export default function Scrapers() {
 
       {isManager && (
         <Card className="p-6 mb-4">
-          <h3 className="text-sm font-semibold text-slate-800 mb-3">Queue a scrape</h3>
-          <div className="text-xs text-slate-500 mb-4 p-3 bg-amber-50 border border-amber-100 rounded-lg">
+          <h3 className="text-sm font-semibold text-ink-800 mb-3">Queue a scrape</h3>
+          <div className="text-xs text-ink-500 mb-4 p-3 bg-amber-50 border border-amber-100 rounded-lg">
             <AlertCircle size={13} className="inline mr-1.5 text-amber-600 -mt-0.5" />
             Requires the Playwright worker to be deployed (see <code className="bg-white px-1 rounded">worker/README.md</code>).
             Without it, queued runs will stay queued indefinitely.
@@ -69,14 +69,14 @@ export default function Scrapers() {
               ))}
             </div>
           )}
-          {msg && <div className="mt-3 text-xs text-slate-600">{msg}</div>}
+          {msg && <div className="mt-3 text-xs text-ink-600">{msg}</div>}
         </Card>
       )}
 
       <Card>
-        <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
-          <h3 className="text-sm font-semibold text-slate-800">Recent runs</h3>
-          <button onClick={refresh} className="text-slate-400 hover:text-slate-700">
+        <div className="px-6 py-4 border-b border-ink-100 flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-ink-800">Recent runs</h3>
+          <button onClick={refresh} className="text-ink-400 hover:text-ink-700">
             <RefreshCw size={15} />
           </button>
         </div>
@@ -85,23 +85,23 @@ export default function Scrapers() {
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full">
-              <thead className="bg-slate-50 border-b border-slate-200">
+              <thead className="bg-canvas-100 border-b border-ink-200">
                 <tr>
                   <Th>Status</Th><Th>Competitor</Th><Th>Trigger</Th>
                   <Th className="text-right">Scraped</Th><Th className="text-right">Failed</Th>
                   <Th>Started</Th><Th>Finished</Th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody className="divide-y divide-ink-100">
                 {runs.map(r => (
-                  <tr key={r.id} className="hover:bg-slate-50">
+                  <tr key={r.id} className="hover:bg-canvas-100">
                     <Td><StatusBadge status={r.status} /></Td>
                     <Td>{compById[r.competitor_id]?.name || `#${r.competitor_id}`}</Td>
-                    <Td className="text-slate-500 text-xs capitalize">{r.triggered_kind}</Td>
+                    <Td className="text-ink-500 text-xs capitalize">{r.triggered_kind}</Td>
                     <Td className="text-right tabular-nums">{r.items_scraped ?? 0}</Td>
                     <Td className="text-right tabular-nums text-red-600">{r.items_failed ?? 0}</Td>
-                    <Td className="text-slate-500 text-xs">{r.started_at ? new Date(r.started_at).toLocaleString() : '—'}</Td>
-                    <Td className="text-slate-500 text-xs">{r.finished_at ? new Date(r.finished_at).toLocaleString() : '—'}</Td>
+                    <Td className="text-ink-500 text-xs">{r.started_at ? new Date(r.started_at).toLocaleString() : '—'}</Td>
+                    <Td className="text-ink-500 text-xs">{r.finished_at ? new Date(r.finished_at).toLocaleString() : '—'}</Td>
                   </tr>
                 ))}
               </tbody>
@@ -126,5 +126,5 @@ function StatusBadge({ status }) {
   return <Badge variant={m.variant}><Icon size={11} className="mr-1" /> {m.label}</Badge>
 }
 
-function Th({ children, className = '' }) { return <th className={`px-4 py-2.5 text-left text-[10px] font-semibold text-slate-500 uppercase tracking-wider ${className}`}>{children}</th> }
-function Td({ children, className = '' }) { return <td className={`px-4 py-3 text-sm text-slate-700 ${className}`}>{children}</td> }
+function Th({ children, className = '' }) { return <th className={`px-4 py-2.5 text-left text-[10px] font-semibold text-ink-500 uppercase tracking-wider ${className}`}>{children}</th> }
+function Td({ children, className = '' }) { return <td className={`px-4 py-3 text-sm text-ink-700 ${className}`}>{children}</td> }

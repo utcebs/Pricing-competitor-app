@@ -52,7 +52,7 @@ export default function CompetitorProducts() {
 
       <div className="flex flex-col sm:flex-row gap-3 mb-4">
         <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-400" size={14} />
           <input className={`${inputCls} pl-9`} placeholder="Search name or URL…" value={search} onChange={e => setSearch(e.target.value)} />
         </div>
         <select className={`${selectCls} sm:w-56`} value={filterCompetitor} onChange={e => setFilterCompetitor(e.target.value)}>
@@ -72,19 +72,19 @@ export default function CompetitorProducts() {
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full">
-              <thead className="bg-slate-50 border-b border-slate-200">
+              <thead className="bg-canvas-100 border-b border-ink-200">
                 <tr>
                   <Th>Competitor</Th><Th>Their product</Th><Th>Matched to</Th>
                   <Th>Category</Th><Th>Match</Th>
                   {isManager && <Th></Th>}
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody className="divide-y divide-ink-100">
                 {filtered.map(i => (
-                  <tr key={i.id} className="hover:bg-slate-50">
+                  <tr key={i.id} className="hover:bg-canvas-100">
                     <Td className="font-medium">{compById[i.competitor_id]?.name || '—'}</Td>
                     <Td>
-                      <div className="font-medium text-slate-800">{i.name}</div>
+                      <div className="font-medium text-ink-800">{i.name}</div>
                       <a href={i.url} target="_blank" rel="noopener noreferrer"
                          className="text-[11px] text-brand-600 hover:underline inline-flex items-center gap-1">
                         {i.url.length > 60 ? i.url.slice(0, 60) + '…' : i.url} <ExternalLink size={10} />
@@ -93,17 +93,17 @@ export default function CompetitorProducts() {
                     <Td>
                       {i.product_id
                         ? <span className="text-brand-700 font-medium">{prodById[i.product_id]?.name || `#${i.product_id}`}</span>
-                        : <span className="text-slate-400 text-xs">Unmatched</span>}
+                        : <span className="text-ink-400 text-xs">Unmatched</span>}
                     </Td>
-                    <Td className="text-slate-500 text-xs">{catById[i.category_id]?.name || '—'}</Td>
+                    <Td className="text-ink-500 text-xs">{catById[i.category_id]?.name || '—'}</Td>
                     <Td>
                       <MatchBadge method={i.match_method} confidence={i.match_confidence} />
                     </Td>
                     {isManager && (
                       <Td>
                         <div className="flex items-center gap-1">
-                          <button onClick={() => setEditing(i)} className="p-1.5 rounded text-slate-400 hover:text-brand-600 hover:bg-brand-50"><Pencil size={14} /></button>
-                          <button onClick={() => setToDelete(i)} className="p-1.5 rounded text-slate-400 hover:text-red-600 hover:bg-red-50"><Trash2 size={14} /></button>
+                          <button onClick={() => setEditing(i)} className="p-1.5 rounded text-ink-400 hover:text-brand-600 hover:bg-brand-50"><Pencil size={14} /></button>
+                          <button onClick={() => setToDelete(i)} className="p-1.5 rounded text-ink-400 hover:text-red-600 hover:bg-red-50"><Trash2 size={14} /></button>
                         </div>
                       </Td>
                     )}
@@ -264,7 +264,7 @@ function LinkForm({ open, item, competitors, products, categories, onClose, onSa
         </Field>
       </div>
       {err && <div className="mt-4 text-sm text-red-600">{err}</div>}
-      <div className="flex justify-end gap-2 mt-6 pt-4 border-t border-slate-100">
+      <div className="flex justify-end gap-2 mt-6 pt-4 border-t border-ink-100">
         <Button variant="secondary" onClick={onClose}>Cancel</Button>
         <Button busy={busy} onClick={submit}>{isNew ? 'Create' : 'Save'}</Button>
       </div>
@@ -272,5 +272,5 @@ function LinkForm({ open, item, competitors, products, categories, onClose, onSa
   )
 }
 
-function Th({ children }) { return <th className="px-4 py-2.5 text-left text-[10px] font-semibold text-slate-500 uppercase tracking-wider">{children}</th> }
-function Td({ children, className = '' }) { return <td className={`px-4 py-3 text-sm text-slate-700 ${className}`}>{children}</td> }
+function Th({ children }) { return <th className="px-4 py-2.5 text-left text-[10px] font-semibold text-ink-500 uppercase tracking-wider">{children}</th> }
+function Td({ children, className = '' }) { return <td className={`px-4 py-3 text-sm text-ink-700 ${className}`}>{children}</td> }
