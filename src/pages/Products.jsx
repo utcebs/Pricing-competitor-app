@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react'
-import { Plus, Pencil, Trash2, Package } from 'lucide-react'
+import { Plus, Pencil, Trash2, Package, Upload } from 'lucide-react'
 import { useTable, saveRow, deleteRow } from '../lib/db'
 import { useAuth } from '../lib/auth'
+import { supabase } from '../supabaseClient'
 import {
   PageHeader, Card, Button, Modal, ConfirmDialog, Field,
   Empty, Badge, LoadingBlock, ErrorBlock, inputCls, selectCls, textareaCls,
 } from '../components/UI'
+import BulkUpload from '../components/BulkUpload'
 
 export default function Products() {
   const { isManager } = useAuth()
@@ -15,6 +17,7 @@ export default function Products() {
 
   const [editing, setEditing] = useState(null)   // null | 'new' | product object
   const [toDelete, setToDelete] = useState(null)
+  const [bulkOpen, setBulkOpen] = useState(false)
 
   const openNew = () => setEditing({})
   const openEdit = (p) => setEditing(p)
@@ -29,7 +32,10 @@ export default function Products() {
         title="Products"
         subtitle="Your catalogue. SKU, category, cost, min price."
         action={isManager && (
-          <Button onClick={openNew}><Plus size={15} /> Add product</Button>
+          <div className="flex items-center gap-2">
+            <Button variant="secondary" onClick={() => setBulkOpen(true)}><Upload size={15} /> Bulk import</Button>
+            <Button onClick={openNew}><Plus size={15} /> Add product</Button>
+          </div>
         )}
       />
 
@@ -108,6 +114,61 @@ export default function Products() {
         onConfirm={async () => {
           await deleteRow('products', toDelete.id)
           setToDelete(null); refresh()
+        }}
+      />
+
+      <BulkUpload
+        open={bulkOpen}
+        onClose={() => setBulkOpen(false)}
+        title="Bulk import products"
+        templateFilename="products-template.csv"
+        templateHeaders={[
+          'sku','name','brand','category_name','currency_code',
+          'cost_price','min_price','current_price','target_margin',
+          'is_own_brand','description',
+        ]}
+        sampleRows={[
+          { sku:'SKU-001', name:'Kettle 1.7L', brand:'AquaBoil', category_name:'Home Appliances',
+            currency_code:'KWD', cost_price:'4.500', min_price:'5.900', current_price:'8.900',
+            target_margin:'30', is_own_brand:'false', description:'1.7L cordless electric kettle' },
+          { sku:'SKU-002', name:'Blender 800W', brand:'MixPro', category_name:'Home Appliances',
+            currency_code:'KWD', cost_price:'6.750', min_price:'9.500', current_price:'12.900',
+            target_margin:'35', is_own_brand:'true', description:'800W countertop blender' },
+        ]}
+        hint="category_name must exactly match a Category you already created (leave blank to skip). currency_code must be a code in your Currencies table (KWD/USD/…)."
+        transformRow={(row) => {
+          if (!row.sku?.trim() || !row.name?.trim()) return { error: 'sku and name are required' }
+          const cat = row.category_name?.trim()
+            ? categories.find(c => c.name.toLowerCase() === row.category_name.trim().toLowerCase())
+            : null
+          if (row.category_name?.trim() && !cat) return { error: `unknown category: ${row.category_name}` }
+          const cur = row.currency_code?.trim()
+            ? currencies.find(c => c.code.toLowerCase() === row.currency_code.trim().toLowerCase())
+            : null
+          const num = (v) => (v === '' || v == null) ? null : Number(v)
+          const bool = (v) => String(v || '').toLowerCase() === 'true' || v === '1'
+          return {
+            payload: {
+              sku: row.sku.trim(),
+              name: row.name.trim(),
+              brand: row.brand?.trim() || null,
+              description: row.description?.trim() || null,
+              category_id: cat?.id || null,
+              currency_code: cur?.code || 'KWD',
+              cost_price: num(row.cost_price),
+              min_price: num(row.min_price),
+              current_price: num(row.current_price),
+              target_margin: num(row.target_margin),
+              is_own_brand: bool(row.is_own_brand),
+              is_active: true,
+            }
+          }
+        }}
+        onImport={async (payloads) => {
+          const { data, error } = await supabase.from('products').insert(payloads).select()
+          refresh()
+          if (error) return { inserted: 0, failed: payloads.length, errors: [error.message] }
+          return { inserted: data.length, failed: payloads.length - data.length, errors: [] }
         }}
       />
     </div>

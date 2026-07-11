@@ -1,24 +1,32 @@
 import { useState, useEffect } from 'react'
-import { Plus, Pencil, Trash2, Building2, ExternalLink } from 'lucide-react'
+import { Plus, Pencil, Trash2, Building2, ExternalLink, Upload } from 'lucide-react'
 import { useTable, saveRow, deleteRow } from '../lib/db'
 import { useAuth } from '../lib/auth'
+import { supabase } from '../supabaseClient'
 import {
   PageHeader, Card, Button, Modal, ConfirmDialog, Field,
   Empty, Badge, LoadingBlock, ErrorBlock, inputCls, textareaCls,
 } from '../components/UI'
+import BulkUpload from '../components/BulkUpload'
 
 export default function Competitors() {
   const { isManager } = useAuth()
   const { rows: competitors, loading, error, refresh } = useTable('competitors', { order: ['name', { ascending: true }] })
   const [editing, setEditing] = useState(null)
   const [toDelete, setToDelete] = useState(null)
+  const [bulkOpen, setBulkOpen] = useState(false)
 
   return (
     <div>
       <PageHeader
         title="Competitors"
         subtitle="Sites you're tracking. Each competitor holds many linked products."
-        action={isManager && <Button onClick={() => setEditing({})}><Plus size={15} /> Add competitor</Button>}
+        action={isManager && (
+          <div className="flex items-center gap-2">
+            <Button variant="secondary" onClick={() => setBulkOpen(true)}><Upload size={15} /> Bulk import</Button>
+            <Button onClick={() => setEditing({})}><Plus size={15} /> Add competitor</Button>
+          </div>
+        )}
       />
 
       <ErrorBlock error={error} onRetry={refresh} />
@@ -78,6 +86,45 @@ export default function Competitors() {
         title="Delete competitor?"
         message={`This will remove "${toDelete?.name}" and CASCADE-delete every competitor product linked to it (plus their price/stock history).`}
         onConfirm={async () => { await deleteRow('competitors', toDelete.id); setToDelete(null); refresh() }}
+      />
+
+      <BulkUpload
+        open={bulkOpen}
+        onClose={() => setBulkOpen(false)}
+        title="Bulk import competitors"
+        templateFilename="competitors-template.csv"
+        templateHeaders={['name','domain','country','notes','is_active']}
+        sampleRows={[
+          { name:'Xcite',    domain:'xcite.com',    country:'KW', notes:'Main KW electronics competitor', is_active:'true' },
+          { name:'Best Al Yousifi', domain:'bestalyousifi.com', country:'KW', notes:'', is_active:'true' },
+          { name:'Eureka',   domain:'eureka.com.kw', country:'KW', notes:'', is_active:'true' },
+        ]}
+        hint="domain: no https:// prefix. country: 2-letter ISO code (KW, SA, AE…)."
+        transformRow={(row) => {
+          if (!row.name?.trim() || !row.domain?.trim()) return { error: 'name and domain are required' }
+          const bool = (v, def) => {
+            const s = String(v || '').toLowerCase()
+            if (s === 'true' || s === '1') return true
+            if (s === 'false' || s === '0') return false
+            return def
+          }
+          return {
+            payload: {
+              name: row.name.trim(),
+              domain: row.domain.trim().replace(/^https?:\/\//, '').replace(/\/$/, ''),
+              country: row.country?.trim().toUpperCase().slice(0, 2) || null,
+              notes: row.notes?.trim() || null,
+              is_active: bool(row.is_active, true),
+              scrape_config: {},
+            }
+          }
+        }}
+        onImport={async (payloads) => {
+          const { data, error } = await supabase.from('competitors').insert(payloads).select()
+          refresh()
+          if (error) return { inserted: 0, failed: payloads.length, errors: [error.message] }
+          return { inserted: data.length, failed: payloads.length - data.length, errors: [] }
+        }}
       />
     </div>
   )

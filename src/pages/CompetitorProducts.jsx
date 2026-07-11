@@ -1,11 +1,13 @@
 import { useState, useEffect, useMemo } from 'react'
-import { Plus, Pencil, Trash2, Link2, ExternalLink, Search } from 'lucide-react'
+import { Plus, Pencil, Trash2, Link2, ExternalLink, Search, Upload } from 'lucide-react'
 import { useTable, saveRow, deleteRow } from '../lib/db'
 import { useAuth } from '../lib/auth'
+import { supabase } from '../supabaseClient'
 import {
   PageHeader, Card, Button, Modal, ConfirmDialog, Field,
   Empty, Badge, LoadingBlock, ErrorBlock, inputCls, selectCls,
 } from '../components/UI'
+import BulkUpload from '../components/BulkUpload'
 
 export default function CompetitorProducts() {
   const { isManager } = useAuth()
@@ -18,6 +20,7 @@ export default function CompetitorProducts() {
   const [toDelete, setToDelete] = useState(null)
   const [filterCompetitor, setFilterCompetitor] = useState('all')
   const [search, setSearch] = useState('')
+  const [bulkOpen, setBulkOpen] = useState(false)
 
   const compById = useMemo(() => Object.fromEntries(competitors.map(c => [c.id, c])), [competitors])
   const prodById = useMemo(() => Object.fromEntries(products.map(p => [p.id, p])), [products])
@@ -37,7 +40,12 @@ export default function CompetitorProducts() {
       <PageHeader
         title="Linked Competitor Items"
         subtitle="Each row = one competitor's product page. Link it to one of yours (or leave unlinked for category-wise comparison)."
-        action={isManager && <Button onClick={() => setEditing({})}><Plus size={15} /> Add link</Button>}
+        action={isManager && (
+          <div className="flex items-center gap-2">
+            <Button variant="secondary" onClick={() => setBulkOpen(true)}><Upload size={15} /> Bulk import</Button>
+            <Button onClick={() => setEditing({})}><Plus size={15} /> Add link</Button>
+          </div>
+        )}
       />
 
       <ErrorBlock error={error} onRetry={refresh} />
@@ -118,6 +126,59 @@ export default function CompetitorProducts() {
         title="Remove link?"
         message={`Delete "${toDelete?.name}" and its price/stock history?`}
         onConfirm={async () => { await deleteRow('competitor_products', toDelete.id); setToDelete(null); refresh() }}
+      />
+
+      <BulkUpload
+        open={bulkOpen}
+        onClose={() => setBulkOpen(false)}
+        title="Bulk import competitor product links"
+        templateFilename="competitor-products-template.csv"
+        templateHeaders={[
+          'competitor_name','name','url','product_sku','competitor_sku','category_name',
+        ]}
+        sampleRows={[
+          { competitor_name:'Xcite', name:'AquaBoil 1.7L Kettle', url:'https://xcite.com/p/kettle-17l',
+            product_sku:'SKU-001', competitor_sku:'XC-101', category_name:'Home Appliances' },
+          { competitor_name:'Xcite', name:'MixPro 800W Blender', url:'https://xcite.com/p/blender-800',
+            product_sku:'SKU-002', competitor_sku:'XC-102', category_name:'Home Appliances' },
+          { competitor_name:'Best Al Yousifi', name:'BestBoil 1.7L', url:'https://bestalyousifi.com/kettle-17',
+            product_sku:'', competitor_sku:'', category_name:'Home Appliances' },
+        ]}
+        hint="competitor_name must exactly match a Competitor. product_sku is optional — leave blank for unmatched/own-brand comparison, then category_name gets used."
+        transformRow={(row) => {
+          if (!row.competitor_name?.trim() || !row.name?.trim() || !row.url?.trim())
+            return { error: 'competitor_name, name and url are required' }
+          const comp = competitors.find(c => c.name.toLowerCase() === row.competitor_name.trim().toLowerCase())
+          if (!comp) return { error: `unknown competitor: ${row.competitor_name}` }
+          let product = null
+          if (row.product_sku?.trim()) {
+            product = products.find(p => p.sku.toLowerCase() === row.product_sku.trim().toLowerCase())
+            if (!product) return { error: `unknown product sku: ${row.product_sku}` }
+          }
+          let category = null
+          if (row.category_name?.trim()) {
+            category = categories.find(c => c.name.toLowerCase() === row.category_name.trim().toLowerCase())
+            if (!category) return { error: `unknown category: ${row.category_name}` }
+          }
+          return {
+            payload: {
+              competitor_id: comp.id,
+              product_id: product?.id || null,
+              category_id: category?.id || null,
+              name: row.name.trim(),
+              url: row.url.trim(),
+              competitor_sku: row.competitor_sku?.trim() || null,
+              match_method: product ? 'manual' : (category ? 'category' : 'none'),
+              is_active: true,
+            }
+          }
+        }}
+        onImport={async (payloads) => {
+          const { data, error } = await supabase.from('competitor_products').insert(payloads).select()
+          refresh()
+          if (error) return { inserted: 0, failed: payloads.length, errors: [error.message] }
+          return { inserted: data.length, failed: payloads.length - data.length, errors: [] }
+        }}
       />
     </div>
   )
