@@ -1,0 +1,151 @@
+import { useState, useEffect } from 'react'
+import { Plus, Pencil, Trash2, Building2, ExternalLink } from 'lucide-react'
+import { useTable, saveRow, deleteRow } from '../lib/db'
+import { useAuth } from '../lib/auth'
+import {
+  PageHeader, Card, Button, Modal, ConfirmDialog, Field,
+  Empty, Badge, LoadingBlock, ErrorBlock, inputCls, textareaCls,
+} from '../components/UI'
+
+export default function Competitors() {
+  const { isManager } = useAuth()
+  const { rows: competitors, loading, error, refresh } = useTable('competitors', { order: ['name', { ascending: true }] })
+  const [editing, setEditing] = useState(null)
+  const [toDelete, setToDelete] = useState(null)
+
+  return (
+    <div>
+      <PageHeader
+        title="Competitors"
+        subtitle="Sites you're tracking. Each competitor holds many linked products."
+        action={isManager && <Button onClick={() => setEditing({})}><Plus size={15} /> Add competitor</Button>}
+      />
+
+      <ErrorBlock error={error} onRetry={refresh} />
+
+      <Card>
+        {loading ? <LoadingBlock /> : competitors.length === 0 ? (
+          <Empty
+            icon={Building2}
+            title="No competitors yet"
+            description="Add a competitor site to start tracking their prices."
+            action={isManager && <Button onClick={() => setEditing({})}><Plus size={15} /> Add first competitor</Button>}
+          />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-slate-50 border-b border-slate-200">
+                <tr>
+                  <Th>Name</Th><Th>Domain</Th><Th>Country</Th><Th>Status</Th>
+                  {isManager && <Th></Th>}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {competitors.map(c => (
+                  <tr key={c.id} className="hover:bg-slate-50">
+                    <Td className="font-medium">{c.name}</Td>
+                    <Td>
+                      <a href={`https://${c.domain}`} target="_blank" rel="noopener noreferrer"
+                         className="text-brand-600 hover:underline inline-flex items-center gap-1">
+                        {c.domain} <ExternalLink size={11} />
+                      </a>
+                    </Td>
+                    <Td className="text-slate-500 text-xs uppercase">{c.country || '—'}</Td>
+                    <Td>{c.is_active ? <Badge variant="green">Active</Badge> : <Badge>Inactive</Badge>}</Td>
+                    {isManager && (
+                      <Td>
+                        <div className="flex items-center gap-1">
+                          <button onClick={() => setEditing(c)} className="p-1.5 rounded text-slate-400 hover:text-brand-600 hover:bg-brand-50"><Pencil size={14} /></button>
+                          <button onClick={() => setToDelete(c)} className="p-1.5 rounded text-slate-400 hover:text-red-600 hover:bg-red-50"><Trash2 size={14} /></button>
+                        </div>
+                      </Td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
+      <CompetitorForm open={editing !== null} competitor={editing}
+        onClose={() => setEditing(null)}
+        onSaved={() => { setEditing(null); refresh() }} />
+
+      <ConfirmDialog
+        open={!!toDelete}
+        onClose={() => setToDelete(null)}
+        title="Delete competitor?"
+        message={`This will remove "${toDelete?.name}" and CASCADE-delete every competitor product linked to it (plus their price/stock history).`}
+        onConfirm={async () => { await deleteRow('competitors', toDelete.id); setToDelete(null); refresh() }}
+      />
+    </div>
+  )
+}
+
+function CompetitorForm({ open, competitor, onClose, onSaved }) {
+  const [form, setForm] = useState({})
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const isNew = !competitor?.id
+
+  useEffect(() => {
+    if (!open) return
+    setForm({ name: '', domain: '', country: '', notes: '', is_active: true, ...competitor })
+    setErr('')
+  }, [open, competitor?.id])
+
+  const set = (k, v) => setForm(p => ({ ...p, [k]: v }))
+
+  const submit = async () => {
+    setBusy(true); setErr('')
+    try {
+      const payload = { ...form }
+      // Normalise domain: strip protocol + trailing slash
+      if (payload.domain) payload.domain = payload.domain.replace(/^https?:\/\//, '').replace(/\/$/, '')
+      const { error } = await saveRow('competitors', payload)
+      if (error) throw error
+      onSaved()
+    } catch (e) { setErr(e.message || 'Save failed') }
+    finally { setBusy(false) }
+  }
+
+  return (
+    <Modal open={open} onClose={onClose} title={isNew ? 'Add competitor' : `Edit ${competitor?.name}`}>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <Field label="Name" required>
+          <input className={inputCls} value={form.name || ''} onChange={e => set('name', e.target.value)} />
+        </Field>
+        <Field label="Domain" required hint="e.g. competitor.com (no https://)">
+          <input className={inputCls} value={form.domain || ''} onChange={e => set('domain', e.target.value)} />
+        </Field>
+        <Field label="Country" hint="ISO code — KW, SA, AE, etc.">
+          <input className={inputCls} value={form.country || ''} onChange={e => set('country', e.target.value.toUpperCase())} maxLength={2} />
+        </Field>
+        <div className="flex items-center pt-6">
+          <label className="inline-flex items-center gap-2 text-sm text-slate-700">
+            <input type="checkbox" checked={form.is_active !== false} onChange={e => set('is_active', e.target.checked)} />
+            Active
+          </label>
+        </div>
+        <div className="md:col-span-2">
+          <Field label="Notes">
+            <textarea className={textareaCls} value={form.notes || ''} onChange={e => set('notes', e.target.value)} />
+          </Field>
+        </div>
+      </div>
+      {err && <div className="mt-4 text-sm text-red-600">{err}</div>}
+      <div className="flex justify-end gap-2 mt-6 pt-4 border-t border-slate-100">
+        <Button variant="secondary" onClick={onClose}>Cancel</Button>
+        <Button busy={busy} onClick={submit}>{isNew ? 'Create' : 'Save'}</Button>
+      </div>
+    </Modal>
+  )
+}
+
+function Th({ children, className = '' }) {
+  return <th className={`px-4 py-2.5 text-left text-[10px] font-semibold text-slate-500 uppercase tracking-wider ${className}`}>{children}</th>
+}
+function Td({ children, className = '' }) {
+  return <td className={`px-4 py-3 text-sm text-slate-700 ${className}`}>{children}</td>
+}
