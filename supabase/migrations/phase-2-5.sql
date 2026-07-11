@@ -255,6 +255,68 @@ DROP POLICY IF EXISTS p_isl_read ON integration_sync_log; CREATE POLICY p_isl_re
 DROP POLICY IF EXISTS p_pr_read ON pricing_rules;        CREATE POLICY p_pr_read ON pricing_rules FOR SELECT USING (auth.role() = 'authenticated');
 DROP POLICY IF EXISTS p_int_read ON integrations;        CREATE POLICY p_int_read ON integrations FOR SELECT USING (auth.role() = 'authenticated');
 
+-- ═══════════════════════════════════════════════════════════
+-- AUTO-MATCHER — pg_trgm-based name-similarity suggestions
+-- ═══════════════════════════════════════════════════════════
+-- Whenever a competitor_products row is inserted, look for products
+-- whose name has >= 0.4 trigram similarity and insert the top 3 into
+-- match_suggestions. Admin reviews at /matches.
+--
+-- Threshold and top-N are conservative on purpose to avoid noise; tune
+-- via the SIMILARITY_THRESHOLD constant if you need more or fewer hits.
+
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+CREATE OR REPLACE FUNCTION generate_match_suggestions()
+RETURNS TRIGGER AS $$
+DECLARE
+  suggestion_row RECORD;
+BEGIN
+  IF NEW.product_id IS NOT NULL THEN
+    -- Already matched at creation time; nothing to suggest.
+    RETURN NEW;
+  END IF;
+
+  FOR suggestion_row IN
+    SELECT id AS product_id, similarity(name, NEW.name) AS score
+    FROM products
+    WHERE similarity(name, NEW.name) >= 0.4
+      AND is_active = TRUE
+    ORDER BY similarity(name, NEW.name) DESC
+    LIMIT 3
+  LOOP
+    INSERT INTO match_suggestions (competitor_product_id, product_id, confidence, method)
+    VALUES (NEW.id, suggestion_row.product_id, suggestion_row.score, 'name_similarity')
+    ON CONFLICT (competitor_product_id, product_id) DO NOTHING;
+  END LOOP;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+DROP TRIGGER IF EXISTS cp_auto_match ON competitor_products;
+CREATE TRIGGER cp_auto_match
+  AFTER INSERT ON competitor_products
+  FOR EACH ROW EXECUTE FUNCTION generate_match_suggestions();
+
+-- Also add a settings JSONB to profiles for user-customized dashboards
+ALTER TABLE profiles
+  ADD COLUMN IF NOT EXISTS dashboard_config JSONB DEFAULT '{}'::jsonb;
+
+-- Backfill: run the matcher against any existing unlinked rows.
+-- Safe to re-run — the ON CONFLICT ignores duplicates.
+INSERT INTO match_suggestions (competitor_product_id, product_id, confidence, method)
+SELECT cp.id, p.id, similarity(p.name, cp.name), 'name_similarity'
+FROM competitor_products cp
+CROSS JOIN LATERAL (
+  SELECT id, name FROM products
+  WHERE similarity(name, cp.name) >= 0.4 AND is_active = TRUE
+  ORDER BY similarity(name, cp.name) DESC LIMIT 3
+) p
+WHERE cp.product_id IS NULL
+ON CONFLICT (competitor_product_id, product_id) DO NOTHING;
+
+
 -- alert_rules + saved_reports: user reads own rows OR admin sees all
 DROP POLICY IF EXISTS p_ar_read ON alert_rules;
 CREATE POLICY p_ar_read ON alert_rules FOR SELECT

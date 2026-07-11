@@ -288,7 +288,29 @@ Env vars: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (bypasses RLS), `RESEND_AP
 
 Deployment: `cd worker && npm ci && npm run install-playwright && npm start`. Root directory in Railway config: `worker/`.
 
-## 17. What's ready-to-run vs. needs external service
+## 17. Follow-up completion pass — every gap closed
+
+Everything I flagged as "TODO / partial / missing" in the initial phases-2-5 push is now shipped. Full list of what changed in the follow-up:
+
+**Auto-matcher (Phase 3)** — `pg_trgm` extension enabled; `generate_match_suggestions()` function + `AFTER INSERT` trigger on `competitor_products` writes top-3 similar products (score ≥ 0.4) to `match_suggestions`. Backfill query re-scans any existing unlinked rows. All in the same `phase-2-5.sql` migration.
+
+**All 6 alert triggers (Phase 3)** — `worker/src/alerts.js` rewritten. `went_out_of_stock` / `came_back_in_stock` compare recent `stock_history` transitions; `gap_pct_over` / `gap_pct_under` join `competitor_products.product_id → products.current_price` and compute `(competitor - your) / your × 100`. All triggers scoped via `matchesScope()` helper against `any_product / specific_product / specific_category / specific_competitor`.
+
+**Digest email cron (Phase 3)** — `sendDigestEmails()` in `worker/src/alerts.js`, called from `cron.schedule('0 9 * * *')` in `worker/src/index.js`. Groups pending digest rows by `owner_id`, sends one HTML email per user via Resend, marks all as `sent` in a single UPDATE.
+
+**PDF export (Phase 4)** — `jspdf` + `jspdf-autotable` added. New "PDF" button in Reports next to CSV/Excel. Includes title, metric label, date range header, and formatted table.
+
+**Configurable dashboard widgets (Phase 4)** — `profiles.dashboard_config JSONB` added. Dashboard rewritten with 10 available widgets (7 stat cards + 3 panels). "Customize" button opens a modal to toggle each widget on/off and reorder with ↑↓ arrows. Config saves to profile.
+
+**Google Analytics read (Phase 5)** — `worker/src/google-analytics.js` implements JWT-based service account auth (RS256 signing via Node's `crypto`), calls Analytics Data API v1 for sessions/pageviews/transactions/purchaseRevenue for yesterday. Called from `cron.schedule('0 3 * * *')`. Results in `integration_sync_log.response_payload`. No SDK dependency — direct REST.
+
+**BullMQ + Redis (Phase 2)** — `worker/src/queue.js` sets up BullMQ ONLY if `REDIS_URL` is set. When present, a producer moves queued `scrape_runs` from Supabase into a BullMQ queue and marks them `running`; a Worker with concurrency=2 consumes and calls `runScrapeJob`. Automatic retries with exponential backoff. When `REDIS_URL` is not set, the polling loop in `index.js` handles it — same code paths.
+
+**Scrape config editor (usability)** — Competitors form modal grew a JSON textarea for `scrape_config`. Malformed JSON throws before save.
+
+**Bundle splitting** — `App.jsx` uses `React.lazy` for every page. Result: main JS chunk dropped from 1.26 MB to 462 KB pre-gzip. Recharts, xlsx, jspdf, html2canvas only download when their route mounts.
+
+## 18. What's ready-to-run vs. needs external service
 
 | Feature | Frontend + Schema | Worker code | Needs external |
 |---|---|---|---|

@@ -89,9 +89,15 @@ function CompetitorForm({ open, competitor, onClose, onSaved }) {
   const [err, setErr] = useState('')
   const isNew = !competitor?.id
 
+  const [scrapeConfigStr, setScrapeConfigStr] = useState('')
   useEffect(() => {
     if (!open) return
-    setForm({ name: '', domain: '', country: '', notes: '', is_active: true, ...competitor })
+    setForm({ name: '', domain: '', country: '', notes: '', is_active: true, scrape_config: {}, ...competitor })
+    setScrapeConfigStr(JSON.stringify(competitor?.scrape_config || {
+      priceSelector: '',
+      stockSelector: '',
+      waitFor: '',
+    }, null, 2))
     setErr('')
   }, [open, competitor?.id])
 
@@ -103,6 +109,12 @@ function CompetitorForm({ open, competitor, onClose, onSaved }) {
       const payload = { ...form }
       // Normalise domain: strip protocol + trailing slash
       if (payload.domain) payload.domain = payload.domain.replace(/^https?:\/\//, '').replace(/\/$/, '')
+      // Parse scrape_config JSON — fail early on malformed input
+      try {
+        payload.scrape_config = scrapeConfigStr.trim() ? JSON.parse(scrapeConfigStr) : {}
+      } catch (e) {
+        throw new Error('Scrape config JSON is invalid: ' + e.message)
+      }
       const { error } = await saveRow('competitors', payload)
       if (error) throw error
       onSaved()
@@ -111,7 +123,7 @@ function CompetitorForm({ open, competitor, onClose, onSaved }) {
   }
 
   return (
-    <Modal open={open} onClose={onClose} title={isNew ? 'Add competitor' : `Edit ${competitor?.name}`}>
+    <Modal open={open} onClose={onClose} title={isNew ? 'Add competitor' : `Edit ${competitor?.name}`} wide>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <Field label="Name" required>
           <input className={inputCls} value={form.name || ''} onChange={e => set('name', e.target.value)} />
@@ -131,6 +143,17 @@ function CompetitorForm({ open, competitor, onClose, onSaved }) {
         <div className="md:col-span-2">
           <Field label="Notes">
             <textarea className={textareaCls} value={form.notes || ''} onChange={e => set('notes', e.target.value)} />
+          </Field>
+        </div>
+        <div className="md:col-span-2">
+          <Field label="Scrape config (JSON)" hint="CSS selectors the Playwright worker uses. Common keys: priceSelector, stockSelector, waitFor">
+            <textarea
+              className={textareaCls + ' font-mono text-xs'}
+              rows={8}
+              value={scrapeConfigStr}
+              onChange={e => setScrapeConfigStr(e.target.value)}
+              placeholder='{"priceSelector": ".price-tag", "stockSelector": ".availability", "waitFor": ".product-loaded"}'
+            />
           </Field>
         </div>
       </div>

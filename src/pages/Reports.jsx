@@ -6,6 +6,8 @@ import {
 } from 'recharts'
 import Papa from 'papaparse'
 import * as XLSX from 'xlsx'
+import jsPDF from 'jspdf'
+import autoTable from 'jspdf-autotable'
 import { supabase } from '../supabaseClient'
 import { useTable, saveRow, deleteRow } from '../lib/db'
 import { useAuth } from '../lib/auth'
@@ -254,6 +256,24 @@ function ReportResult({ config }) {
     const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' })
     downloadBlob(new Blob([buf], { type: 'application/octet-stream' }), `report-${config.metric}-${Date.now()}.xlsx`)
   }
+  const exportPdf = () => {
+    const doc = new jsPDF()
+    const metricLabel = METRICS.find(m => m.value === config.metric)?.label || config.metric
+    doc.setFontSize(16); doc.text('Price Competitor · Report', 14, 18)
+    doc.setFontSize(11); doc.setTextColor(100)
+    doc.text(`${metricLabel} grouped by ${config.groupBy}`, 14, 26)
+    if (config.dateFrom || config.dateTo) {
+      doc.text(`${config.dateFrom || '—'} → ${config.dateTo || '—'}`, 14, 32)
+    }
+    autoTable(doc, {
+      startY: 38,
+      head: [[config.groupBy, 'value', 'data points']],
+      body: rows.map(r => [r.key, r.value ?? '—', r.count]),
+      styles: { fontSize: 10 },
+      headStyles: { fillColor: [79, 70, 229] },
+    })
+    doc.save(`report-${config.metric}-${Date.now()}.pdf`)
+  }
 
   return (
     <Card className="p-6">
@@ -264,6 +284,7 @@ function ReportResult({ config }) {
           <div className="flex gap-2">
             <Button size="sm" variant="secondary" onClick={exportCsv}><Download size={12} /> CSV</Button>
             <Button size="sm" variant="secondary" onClick={exportXlsx}><Download size={12} /> Excel</Button>
+            <Button size="sm" variant="secondary" onClick={exportPdf}><Download size={12} /> PDF</Button>
           </div>
         )}
       </div>
