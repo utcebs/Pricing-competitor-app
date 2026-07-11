@@ -1,0 +1,83 @@
+name: Worker · Daily crons
+
+# Three time-based jobs sharing a workflow — routed by `github.event.schedule`:
+#   03:00 UTC — pull Google Analytics data
+#   09:00 UTC — send digest emails
+#   */6 hours — enqueue scheduled scrape fanout (all active competitors)
+#
+# The tick workflow will pick up the enqueued scrape_runs on its
+# next 5-minute run.
+
+on:
+  schedule:
+    - cron: '0 3 * * *'    # GA pull
+    - cron: '0 9 * * *'    # Digest emails
+    - cron: '0 */6 * * *'  # Scheduled scrape fanout
+  workflow_dispatch:
+    inputs:
+      job:
+        description: 'Which job to run manually'
+        required: true
+        default: 'ga'
+        type: choice
+        options: [ga, digest, fanout]
+
+jobs:
+  ga:
+    if: github.event.schedule == '0 3 * * *' || (github.event_name == 'workflow_dispatch' && inputs.job == 'ga')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: worker/package-lock.json
+      - working-directory: worker
+        run: npm ci
+      - working-directory: worker
+        env:
+          SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: node src/daily-ga.js
+
+  digest:
+    if: github.event.schedule == '0 9 * * *' || (github.event_name == 'workflow_dispatch' && inputs.job == 'digest')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: worker/package-lock.json
+      - working-directory: worker
+        run: npm ci
+      - working-directory: worker
+        env:
+          SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          RESEND_API_KEY:            ${{ secrets.RESEND_API_KEY }}
+          ALERT_FROM:                ${{ secrets.ALERT_FROM }}
+        run: node src/daily-digest.js
+
+  fanout:
+    if: github.event.schedule == '0 */6 * * *' || (github.event_name == 'workflow_dispatch' && inputs.job == 'fanout')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: worker/package-lock.json
+      - working-directory: worker
+        run: npm ci
+      - working-directory: worker
+        env:
+          SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: node src/scheduled-fanout.js

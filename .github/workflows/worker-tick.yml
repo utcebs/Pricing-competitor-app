@@ -1,0 +1,66 @@
+name: Worker · Tick (every 5 min)
+
+# Runs the worker's tick logic — process queued scrape_runs, evaluate
+# alert rules + repricing rules, sync approved proposals. Every 5 min
+# on the cron. Also triggerable manually via workflow_dispatch.
+#
+# Playwright browsers are cached across runs so cold start is ~30s
+# instead of ~3 min.
+#
+# Public repo has unlimited Actions minutes, so cost is $0.
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+# Skip if a previous tick is still running — prevents queue thrashing.
+concurrency:
+  group: worker-tick
+  cancel-in-progress: false
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: worker/package-lock.json
+
+      - name: Install worker deps
+        working-directory: worker
+        run: npm ci
+
+      # Cache Playwright browsers between runs
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-1.48-${{ runner.os }}
+
+      - name: Install Playwright Chromium
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        working-directory: worker
+        run: npx playwright install --with-deps chromium
+
+      - name: Install Playwright system deps (from cache)
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        working-directory: worker
+        run: npx playwright install-deps chromium
+
+      - name: Run tick
+        working-directory: worker
+        env:
+          SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          RESEND_API_KEY:            ${{ secrets.RESEND_API_KEY }}
+          ALERT_FROM:                ${{ secrets.ALERT_FROM }}
+          HTTP_PROXY:                ${{ secrets.HTTP_PROXY }}
+        run: node src/tick.js

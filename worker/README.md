@@ -4,9 +4,65 @@ Node.js background service. Runs Playwright to scrape competitor sites,
 evaluates alert + repricing rules, and pushes approved price changes
 to Dynamics 365 / Shopify / WooCommerce / BigCommerce / Magento.
 
+Three deploy paths — pick one:
+
+- **GitHub Actions** — free, batch-scheduled (5-min tick + daily crons). Best for public repos.
+- **Render** — $7/mo Background Worker, always-on polling every 60s. Best if you need faster reaction.
+- **Railway** — comparable to Render, $5/mo Hobby plan credits.
+
 ---
 
-## Deploy to Render (recommended — done in 5 minutes)
+## Deploy via GitHub Actions (recommended — free, no external services)
+
+This repo's public and public repos get **unlimited GitHub Actions minutes**. Two workflows are already committed:
+
+- `.github/workflows/worker-tick.yml` — runs every 5 min. Processes queued `scrape_runs`, evaluates alerts + repricing, syncs proposals.
+- `.github/workflows/worker-daily.yml` — three crons: 03:00 UTC (GA pull), 09:00 UTC (digest emails), every 6 hours (scheduled scrape fanout).
+
+Playwright browsers are cached between runs so each tick is ~30s.
+
+### One-time setup: add repo secrets
+
+<https://github.com/utcebs/Pricing-competitor-app/settings/secrets/actions>
+
+Click **"New repository secret"** and add each of these:
+
+| Secret name | Value |
+|---|---|
+| `SUPABASE_URL` | `https://hllxetdbnwmunztyfcxa.supabase.co` |
+| `SUPABASE_SERVICE_ROLE_KEY` | From Supabase → Settings → API → **`service_role`** (has red "secret" badge). Reveal + copy. |
+| `RESEND_API_KEY` | Optional. Alerts skip if not set. Grab from resend.com after signing up. |
+| `ALERT_FROM` | Optional. E.g. `alerts@yourdomain.com`. Only used when Resend is wired. |
+| `HTTP_PROXY` | Optional. ScraperAPI / Bright Data URL for anti-bot. |
+
+Note: no `REDIS_URL` — BullMQ can't run in Actions (no continuous process).
+
+### That's it. Verify:
+
+- <https://github.com/utcebs/Pricing-competitor-app/actions> — you'll see workflows kick off within 5 min of the secrets being saved.
+- Open the app's Scrapers page and click Play. The queued row picks up on the next tick (max 5 min wait).
+
+### Manually kick a run
+
+If you don't want to wait for the next scheduled tick:
+- Actions tab → pick `Worker · Tick (every 5 min)` → **Run workflow** button.
+- For daily jobs → pick `Worker · Daily crons` → **Run workflow** → choose `ga`, `digest`, or `fanout` from the dropdown.
+
+### Trade-offs vs Render
+
+| | GitHub Actions | Render |
+|---|---|---|
+| Cost | Free (public repo) | $7/mo |
+| Reaction time to manual scrape | Up to 5 min | Up to 60s |
+| Cold start per tick | ~30s (cached Playwright) | 0 (always running) |
+| Persistent state (BullMQ) | ❌ no | ✅ optional |
+| Job runtime limit | 6 hours per job | Unlimited |
+
+For 15 competitors × 1500 SKUs, GitHub Actions handles it fine.
+
+---
+
+## Deploy to Render (fastest reaction, $7/mo)
 
 ### 1. Get your Supabase service role key
 
