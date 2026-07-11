@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState } from 'react'
-import { supabase, supabasePublic } from '../supabaseClient'
+import { supabase } from '../supabaseClient'
 
 const AuthCtx = createContext({ user: null, profile: null, loading: true })
 
@@ -31,10 +31,14 @@ export function AuthProvider({ children }) {
     return () => sub?.subscription?.unsubscribe?.()
   }, [])
 
-  // Fire-and-forget; supabasePublic avoids the GoTrue lock.
+  // Uses the auth-enabled client so RLS sees auth.role()='authenticated'
+  // (supabasePublic was blocked — the profiles read policy requires it).
+  // Safe to await inside this function because callers fire-and-forget:
+  // the outer onAuthStateChange callback returns before this await resolves,
+  // so no GoTrue lock is held.
   async function fetchProfile(id) {
     try {
-      const { data, error } = await supabasePublic
+      const { data, error } = await supabase
         .from('profiles').select('*').eq('id', id).single()
       if (error) throw error
       setProfile(data)
