@@ -1,0 +1,22 @@
+{
+  "nav.dashboard": "لوحة التحكم",
+  "nav.products": "المنتجات",
+  "nav.competitors": "المنافسون",
+  "nav.linked": "العناصر المرتبطة",
+  "nav.trends": "اتجاهات الأسعار",
+  "nav.entry": "تسجيل سعر",
+  "nav.scrapers": "أدوات الجمع",
+  "nav.matches": "مراجعة المطابقات",
+  "nav.alerts": "التنبيهات",
+  "nav.reports": "التقارير",
+  "nav.repricing": "إعادة التسعير",
+  "nav.integrations": "التكاملات",
+  "nav.categories": "الفئات",
+  "nav.users": "المستخدمون",
+  "common.save": "حفظ",
+  "common.cancel": "إلغاء",
+  "common.delete": "حذف",
+  "common.edit": "تعديل",
+  "common.add": "إضافة",
+  "common.loading": "جارٍ التحميل…"
+}

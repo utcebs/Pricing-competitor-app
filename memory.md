@@ -258,6 +258,47 @@ Run in an incognito window against the live URL:
 ## 15. Change log
 
 - **2026-07-11 · Phase 0** — scaffold pushed. Vite + React + Tailwind + Supabase client wired. Sidebar + placeholder pages. Deployed via `docs/` on main.
-- **2026-07-11 · Phase 1** — real Supabase schema (8 tables + RBAC) applied. Auth working with `admin@test.com`. Full CRUD for Products, Competitors, Linked Items. Manual price entry writes to both price_history + stock_history. Price Trends chart with per-competitor lines + own-price reference. Categories tree. Users role editor.
+- **2026-07-11 · Phase 1** — real Supabase schema (8 tables + RBAC) applied. Auth working with `admin@test.com`. Full CRUD for Products, Competitors, Linked Items. Manual price entry. Price Trends chart. Categories tree. Users role editor.
+- **2026-07-11 · Phases 2-5 all frontend + schema + worker code shipped** — see §16.
 
-_Last updated: 2026-07-11._
+## 16. Phases 2–5 — full-stack rollout
+
+### Phase 2 — Scrapers + i18n
+Migration `supabase/migrations/phase-2-5.sql` adds `scrape_runs` + `scrape_jobs` tables. Frontend `/scrapers` page (`src/pages/Scrapers.jsx`) enqueues runs and shows history/status. i18n scaffold: `src/lib/i18n.js` + `src/locales/{en,ar}.json`. Sidebar has EN/AR toggle; `document.dir` flips to `rtl` for Arabic.
+
+### Phase 3 — Matching + alerts
+Tables: `alert_rules`, `alert_deliveries`, `match_suggestions`. Frontend `/alerts` (rule builder with 6 triggers × 4 scopes) and `/matches` (accept/reject queue for auto-generated product matches). Rules are per-user (`owner_id`). Delivery: instant OR daily digest.
+
+### Phase 4 — Reports (fully functional, no external deps)
+Table: `saved_reports` with JSONB config. Frontend `/reports`: pick metric (avg/min/max price, gap %, in-stock rate, price change count), group by (competitor/category/product/day/week/month), date range, chart type (table/bar/line/pie). Runs client-side aggregation over `price_history` + `stock_history` (up to 10k rows). Save reports, export to CSV (papaparse) or Excel (xlsx). Sidebar with saved reports list.
+
+### Phase 5 — Repricing + integrations
+Tables: `pricing_rules`, `pricing_proposals` (approval queue), `integrations` (6 kinds: Dynamics 365, Shopify, WooCommerce, BigCommerce, Magento, Google Analytics), `integration_sync_log`. Frontend `/repricing`: rule builder with 6 strategies (match_lowest, beat_lowest_by_pct, beat_lowest_by_amt, match_average, stay_x_pct_above/below) + guardrails (min_price, target_margin, only-if-competitor-in-stock, auto-apply). Pending proposals shown for approval. Frontend `/integrations`: kind-specific credential forms. Recent sync log side panel.
+
+### The worker (`worker/` directory) — deploys to Railway
+
+Runs the actual backend. Single Node.js process, four responsibilities every 60 seconds:
+
+1. **Consume queued scrape_runs** — Playwright with configurable CSS selectors per competitor (`competitors.scrape_config` JSONB). Anti-bot via `HTTP_PROXY` env var (ScraperAPI / Bright Data).
+2. **Alert rule evaluation** — checks recent price history for changes matching rules; emails via Resend.
+3. **Repricing rule evaluation** — computes suggested prices, applies guardrails, creates `pricing_proposals` (or auto-applies).
+4. **Integration sync** — pushes approved proposals to Dynamics 365 (OAuth 2.0 + REST) / Shopify / WC / BC / Magento. All logged to `integration_sync_log`.
+
+Env vars: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (bypasses RLS), `RESEND_API_KEY`, `HTTP_PROXY`.
+
+Deployment: `cd worker && npm ci && npm run install-playwright && npm start`. Root directory in Railway config: `worker/`.
+
+## 17. What's ready-to-run vs. needs external service
+
+| Feature | Frontend + Schema | Worker code | Needs external |
+|---|---|---|---|
+| Products / Competitors / Linked / Prices / Trends | ✅ | — | — |
+| Categories / Users | ✅ | — | — |
+| Reports (custom builder + CSV/Excel export) | ✅ | — | — (fully working end-to-end) |
+| Alerts (rule builder + delivery log) | ✅ | ✅ | Resend API key for email delivery |
+| Match Review | ✅ | Auto-matcher SQL/trigram TODO | Optional: OpenAI embeddings for better matches |
+| Scrapers | ✅ | ✅ Playwright | Railway/Render deploy + ScraperAPI proxy pool |
+| Repricing | ✅ | ✅ Rule engine | Runs on the worker |
+| Integrations config | ✅ | ✅ Push handlers for all 6 | Real credentials from tenants (D365 app registration, Shopify token, etc.) |
+
+_Last updated: 2026-07-11 — Phases 2-5 shipped._

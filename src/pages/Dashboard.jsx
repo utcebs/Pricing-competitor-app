@@ -119,10 +119,13 @@ export default function Dashboard() {
             <div className="text-[10px] font-semibold uppercase tracking-widest text-slate-500 mb-2">Roadmap</div>
             <div className="space-y-1 text-xs text-slate-600">
               <RoadmapLine phase="1" text="MVP · manual entry"    done />
-              <RoadmapLine phase="2" text="Playwright scrapers"   />
-              <RoadmapLine phase="3" text="Matching + email alerts" />
-              <RoadmapLine phase="4" text="Custom reports"        />
-              <RoadmapLine phase="5" text="Repricing + Dynamics 365" />
+              <RoadmapLine phase="2" text="Playwright scrapers"   done />
+              <RoadmapLine phase="3" text="Matching + email alerts" done />
+              <RoadmapLine phase="4" text="Custom reports"        done />
+              <RoadmapLine phase="5" text="Repricing + Dynamics 365" done />
+            </div>
+            <div className="text-[10px] text-slate-500 mt-3 pt-3 border-t border-slate-100">
+              All frontend + schema shipped. Worker deploys separately — see <code>worker/README.md</code>.
             </div>
           </Card>
         </div>

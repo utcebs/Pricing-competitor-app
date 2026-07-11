@@ -1,0 +1,18 @@
+{
+  "name": "price-competitor-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "install-playwright": "playwright install chromium --with-deps"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0",
+    "playwright": "^1.48.0",
+    "resend": "^4.0.0",
+    "node-cron": "^3.0.3",
+    "dotenv": "^16.4.5"
+  }
+}

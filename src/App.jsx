@@ -10,7 +10,12 @@ import PriceEntry from './pages/PriceEntry'
 import PriceTrends from './pages/PriceTrends'
 import Categories from './pages/Categories'
 import Users from './pages/Users'
-import Placeholder from './pages/Placeholder'
+import Scrapers from './pages/Scrapers'
+import MatchReview from './pages/MatchReview'
+import Alerts from './pages/Alerts'
+import Reports from './pages/Reports'
+import Repricing from './pages/Repricing'
+import Integrations from './pages/Integrations'
 
 export default function App() {
   return (
@@ -18,29 +23,20 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route element={<Layout />}>
-          {/* Phase 1 pages */}
           <Route path="/"                    element={<Dashboard />} />
           <Route path="/products"            element={<Products />} />
           <Route path="/competitors"         element={<Competitors />} />
           <Route path="/competitor-products" element={<CompetitorProducts />} />
           <Route path="/prices"              element={<PriceTrends />} />
           <Route path="/prices/new"          element={<PriceEntry />} />
+          <Route path="/scrapers"            element={<Scrapers />} />
+          <Route path="/matches"             element={<MatchReview />} />
+          <Route path="/alerts"              element={<Alerts />} />
+          <Route path="/reports"             element={<Reports />} />
+          <Route path="/repricing"           element={<Repricing />} />
+          <Route path="/integrations"        element={<Integrations />} />
           <Route path="/categories"          element={<Categories />} />
           <Route path="/users"               element={<Users />} />
-
-          {/* Coming later — Phase 3+ */}
-          <Route path="/alerts" element={
-            <Placeholder title="Alerts" phase="3"
-              description="Rules for instant emails + daily digests on price / stock changes." />
-          } />
-          <Route path="/reports" element={
-            <Placeholder title="Reports" phase="4"
-              description="Custom dashboards + saved reports. Export to Excel / CSV / PDF." />
-          } />
-          <Route path="/settings" element={
-            <Placeholder title="Settings" phase="1+"
-              description="Currencies, integrations (Dynamics 365, Shopify, WooCommerce, BigCommerce, Magento, Google Analytics)." />
-          } />
         </Route>
       </Routes>
     </AuthProvider>

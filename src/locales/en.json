@@ -1,0 +1,22 @@
+{
+  "nav.dashboard": "Dashboard",
+  "nav.products": "Products",
+  "nav.competitors": "Competitors",
+  "nav.linked": "Linked Items",
+  "nav.trends": "Price Trends",
+  "nav.entry": "Log a Price",
+  "nav.scrapers": "Scrapers",
+  "nav.matches": "Match Review",
+  "nav.alerts": "Alerts",
+  "nav.reports": "Reports",
+  "nav.repricing": "Repricing",
+  "nav.integrations": "Integrations",
+  "nav.categories": "Categories",
+  "nav.users": "Users",
+  "common.save": "Save",
+  "common.cancel": "Cancel",
+  "common.delete": "Delete",
+  "common.edit": "Edit",
+  "common.add": "Add",
+  "common.loading": "Loading…"
+}
