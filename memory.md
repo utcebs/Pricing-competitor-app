@@ -310,7 +310,22 @@ Everything I flagged as "TODO / partial / missing" in the initial phases-2-5 pus
 
 **Bundle splitting** — `App.jsx` uses `React.lazy` for every page. Result: main JS chunk dropped from 1.26 MB to 462 KB pre-gzip. Recharts, xlsx, jspdf, html2canvas only download when their route mounts.
 
-## 18. What's ready-to-run vs. needs external service
+## 18. Render deploy (one-click)
+
+The repo has `render.yaml` at the root defining a Background Worker service. Deploy flow:
+
+1. `https://dashboard.render.com/blueprints` → **New Blueprint Instance**
+2. Point at `utcebs/Pricing-competitor-app` main branch
+3. Set env vars: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (secret; from Supabase → Settings → API `service_role`), + optional `RESEND_API_KEY`, `ALERT_FROM`, `HTTP_PROXY`, `REDIS_URL`
+4. Click Apply. Render provisions Starter plan ($7/mo), runs `npm ci && npx playwright install --with-deps chromium`, starts `node src/index.js`
+
+Region: Frankfurt (closest to Kuwait; change in `render.yaml` if needed). Auto-deploy on push to main.
+
+Why Background Worker instead of Web Service: Render's free-tier Web Services spin down after 15 min inactivity. The polling loop needs continuous execution. Starter Background Worker stays hot 24/7. Alternative: Railway ($5/mo Hobby plan credits) — same env vars, root directory `worker/`.
+
+Full setup walkthrough + anti-bot proxy config + custom-selector docs live in `worker/README.md`.
+
+## 19. What's ready-to-run vs. needs external service
 
 | Feature | Frontend + Schema | Worker code | Needs external |
 |---|---|---|---|

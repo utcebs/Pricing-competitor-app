@@ -1,0 +1,49 @@
+# Render Blueprint — one-click deploy of the scraper worker.
+#
+# Usage:
+#   1. Push this file to the repo (done — it's at the repo root).
+#   2. Go to https://dashboard.render.com/blueprints and click
+#      "New Blueprint Instance".
+#   3. Point at utcebs/Pricing-competitor-app on the main branch.
+#      Render reads this file and creates the service.
+#   4. Set env vars in the prompt (Render marks them sync: false so
+#      they're never committed to the repo):
+#
+#        SUPABASE_URL                = https://hllxetdbnwmunztyfcxa.supabase.co
+#        SUPABASE_SERVICE_ROLE_KEY   = <from Supabase → Settings → API>
+#        RESEND_API_KEY              = <optional; alerts skip without it>
+#        ALERT_FROM                  = alerts@yourdomain.com
+#        HTTP_PROXY                  = <optional; ScraperAPI URL etc.>
+#        REDIS_URL                   = <optional; enables BullMQ path>
+#
+# Cost: Background Workers on Render start at $7/mo (Starter plan).
+# Free tier web services spin down after 15 min inactivity and won't
+# work for our continuous polling loop.
+
+services:
+  - type: worker
+    name: price-competitor-worker
+    runtime: node
+    plan: starter          # $7/mo · 512 MB RAM · adequate for Playwright + 15 competitors
+    region: frankfurt      # Close to Kuwait — change if you're deploying elsewhere
+    rootDir: worker
+    autoDeploy: true       # Redeploy on every push to main
+    buildCommand: |
+      npm ci --omit=dev=false
+      npx playwright install --with-deps chromium
+    startCommand: node src/index.js
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: ALERT_FROM
+        sync: false
+      - key: HTTP_PROXY
+        sync: false
+      - key: REDIS_URL
+        sync: false
