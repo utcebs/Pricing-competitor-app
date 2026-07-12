@@ -342,3 +342,4 @@ function parseStock(text) {
   if (t.includes('out of stock') || t.includes('unavailable') || t.includes('sold out') || t.includes('out-of-stock')) return false
   return null
 }
+# force-tick: 2026-07-12T12:44:54Z
