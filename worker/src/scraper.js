@@ -115,8 +115,11 @@ export async function runScrapeJob(run) {
       if (config.waitFor?.trim()) {
         await page.waitForSelector(config.waitFor, { timeout: 10_000 }).catch(() => {})
       } else {
-        // Wait a beat for JS-rendered prices to settle
-        await page.waitForLoadState('networkidle', { timeout: 8_000 }).catch(() => {})
+        // Wait longer for JS-rendered prices to settle. Next.js/React
+        // sites need extra hydration time; 8s wasn't enough on Xcite TVs.
+        await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => {})
+        // Extra beat for post-hydration price fetches
+        await page.waitForTimeout(1500)
       }
 
       const { price, matchedSelector, htmlSample } = await extractPrice(page, userPriceSel)
@@ -217,9 +220,24 @@ async function extractPrice(page, userSelector) {
   // Last resort: page-wide regex for currency-prefixed numbers.
   try {
     const html = await page.content()
-    // Save first 4KB for debug
-    const htmlSample = html.slice(0, 4000)
-    // Look for structured data first — many sites embed price in JSON-LD
+    // Save 4KB from the middle (usually where price data lives) not just the head
+    const htmlSample = html.length > 8000
+      ? html.slice(Math.floor(html.length / 2) - 2000, Math.floor(html.length / 2) + 2000)
+      : html.slice(0, 4000)
+
+    // Next.js sites embed the entire page data in a __NEXT_DATA__ script.
+    // Xcite runs Next.js; TV pages hide the price behind React hydration
+    // but __NEXT_DATA__ has it plainly.
+    const nextDataMatch = html.match(/<script[^>]+id="__NEXT_DATA__"[^>]*>([^<]+)<\/script>/)
+    if (nextDataMatch) {
+      try {
+        const nextData = JSON.parse(nextDataMatch[1])
+        const priceFromNext = findPriceInObject(nextData)
+        if (priceFromNext != null) return { price: priceFromNext, matchedSelector: '__NEXT_DATA__', htmlSample }
+      } catch { /* JSON parse failed, move on */ }
+    }
+
+    // Look for structured data — many sites embed price in JSON-LD
     const jsonLdMatch = html.match(/"price"\s*:\s*"?(\d+(?:\.\d+)?)"?/i)
     if (jsonLdMatch) {
       const p = parseFloat(jsonLdMatch[1])
@@ -235,6 +253,58 @@ async function extractPrice(page, userSelector) {
   } catch (e) {
     return { price: null, matchedSelector: null, htmlSample: null }
   }
+}
+
+/**
+ * Recursively walk a Next.js page-data blob looking for a plausible
+ * product price. Keys tried in order of specificity. Values are cross-
+ * checked with parsePrice to filter out storage sizes / ratings / etc.
+ */
+function findPriceInObject(obj, depth = 0) {
+  if (depth > 10 || obj == null) return null
+  if (typeof obj !== 'object') return null
+  const PRICE_KEYS = [
+    'sellingPrice', 'salePrice', 'offerPrice', 'finalPrice',
+    'currentPrice', 'listPrice', 'discountedPrice', 'productPrice',
+    'price', 'amount',
+  ]
+  for (const key of PRICE_KEYS) {
+    if (key in obj) {
+      const raw = obj[key]
+      if (typeof raw === 'number' && raw > 0.05 && raw < 1_000_000) return raw
+      if (typeof raw === 'string') {
+        const p = parsePrice(raw)
+        if (p != null) return p
+      }
+      if (raw && typeof raw === 'object') {
+        // e.g. { amount: "419.9", currency: "KWD" }
+        for (const sub of ['amount', 'value', 'raw', 'centAmount']) {
+          if (sub in raw) {
+            const p = typeof raw[sub] === 'number' ? raw[sub] : parsePrice(raw[sub])
+            if (p != null && p > 0.05 && p < 1_000_000) {
+              // centAmount is usually in cents; heuristic: >100000 → divide by 1000
+              return sub === 'centAmount' && p > 100000 ? p / 1000 : p
+            }
+          }
+        }
+      }
+    }
+  }
+  // Recurse into arrays and children
+  if (Array.isArray(obj)) {
+    for (const item of obj) {
+      const p = findPriceInObject(item, depth + 1)
+      if (p != null) return p
+    }
+  } else {
+    for (const val of Object.values(obj)) {
+      if (val && typeof val === 'object') {
+        const p = findPriceInObject(val, depth + 1)
+        if (p != null) return p
+      }
+    }
+  }
+  return null
 }
 
 async function extractStock(page, userSelector) {
