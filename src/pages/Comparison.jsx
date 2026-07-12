@@ -1,0 +1,321 @@
+import { useState, useEffect, useMemo } from 'react'
+import { GitCompare, ArrowUpRight, ArrowDownRight, Minus, ExternalLink, Search, RefreshCw } from 'lucide-react'
+import { NavLink } from 'react-router-dom'
+import { supabase } from '../supabaseClient'
+import { useTable } from '../lib/db'
+import {
+  PageHeader, Card, Empty, LoadingBlock, ErrorBlock, Badge, Button,
+  inputCls, selectCls,
+} from '../components/UI'
+
+/**
+ * Price Comparison Matrix — one row per product, one column per competitor.
+ * Cell shows the LATEST scraped/logged price + gap % vs. your price.
+ * Colour: green if you're cheaper (competitor is higher), red if you're more
+ * expensive. Sort by biggest opportunity/threat.
+ */
+export default function Comparison() {
+  const { rows: products,    loading: pL, error: pErr } = useTable('products',    { order: ['name', { ascending: true }] })
+  const { rows: competitors, loading: cL, error: cErr } = useTable('competitors', { eq: ['is_active', true], order: ['name', { ascending: true }] })
+  const { rows: cps,         loading: lL, error: lErr } = useTable('competitor_products')
+
+  const [latestPrices, setLatestPrices] = useState({})   // { competitor_product_id: { price, captured_at, in_stock } }
+  const [priceLoading, setPriceLoading] = useState(false)
+  const [priceErr, setPriceErr] = useState('')
+
+  const [q,        setQ]        = useState('')
+  const [catFilter,setCatFilter]= useState('all')
+  const [sortBy,   setSortBy]   = useState('opportunity')
+
+  const { rows: categories } = useTable('categories', { order: ['name', { ascending: true }] })
+
+  // Pull latest price for every competitor_product in ONE query.
+  const cpIds = cps.map(c => c.id)
+  useEffect(() => {
+    if (cpIds.length === 0) { setLatestPrices({}); return }
+    setPriceLoading(true); setPriceErr('')
+    // Use PostgreSQL DISTINCT ON via ordering: latest row per competitor_product_id.
+    // Simpler approach: pull all of last 60 days then reduce in JS.
+    const from = new Date(); from.setDate(from.getDate() - 60)
+    supabase.from('price_history')
+      .select('competitor_product_id, price, currency_code, captured_at')
+      .in('competitor_product_id', cpIds)
+      .gte('captured_at', from.toISOString())
+      .order('captured_at', { ascending: false })
+      .then(({ data, error }) => {
+        setPriceLoading(false)
+        if (error) { setPriceErr(error.message); return }
+        const seen = {}
+        for (const row of (data || [])) {
+          if (!seen[row.competitor_product_id]) seen[row.competitor_product_id] = row
+        }
+        setLatestPrices(seen)
+      })
+  }, [cpIds.join(',')])
+
+  // Build a lookup: productId → [{ competitor, cp, latest }]
+  const productComparisons = useMemo(() => {
+    return products.map(p => {
+      const rows = cps
+        .filter(cp => cp.product_id === p.id)
+        .map(cp => {
+          const latest = latestPrices[cp.id]
+          const competitor = competitors.find(c => c.id === cp.competitor_id)
+          return {
+            cp,
+            competitor,
+            latest,
+          }
+        })
+        .filter(r => r.competitor)  // drop unlinked competitors
+      // Also compute: min competitor price, avg, gap vs your price
+      const withPrice = rows.filter(r => r.latest?.price != null)
+      const prices   = withPrice.map(r => Number(r.latest.price))
+      const minPrice = prices.length ? Math.min(...prices) : null
+      const avgPrice = prices.length ? prices.reduce((a, b) => a + b, 0) / prices.length : null
+      const yourPrice = p.current_price != null ? Number(p.current_price) : null
+      const gapVsMinPct  = (yourPrice != null && minPrice != null) ? ((yourPrice - minPrice) / minPrice) * 100 : null
+      const gapVsAvgPct  = (yourPrice != null && avgPrice != null) ? ((yourPrice - avgPrice) / avgPrice) * 100 : null
+      return { product: p, rows, minPrice, avgPrice, yourPrice, gapVsMinPct, gapVsAvgPct }
+    })
+  }, [products, cps, competitors, latestPrices])
+
+  // Filter + sort
+  const visible = useMemo(() => {
+    const query = q.trim().toLowerCase()
+    return productComparisons
+      .filter(pc => catFilter === 'all' || String(pc.product.category_id) === catFilter)
+      .filter(pc => !query
+        || pc.product.name.toLowerCase().includes(query)
+        || (pc.product.sku || '').toLowerCase().includes(query)
+        || (pc.product.brand || '').toLowerCase().includes(query))
+      .sort((a, b) => {
+        if (sortBy === 'name')       return a.product.name.localeCompare(b.product.name)
+        if (sortBy === 'opportunity') {
+          // Descending: most positive gap first (you're most overpriced vs cheapest competitor)
+          return (b.gapVsMinPct ?? -Infinity) - (a.gapVsMinPct ?? -Infinity)
+        }
+        if (sortBy === 'threat') {
+          // Ascending: most negative gap first (you're the cheapest by biggest margin)
+          return (a.gapVsMinPct ?? Infinity) - (b.gapVsMinPct ?? Infinity)
+        }
+        if (sortBy === 'coverage') {
+          const aRows = a.rows.filter(r => r.latest).length
+          const bRows = b.rows.filter(r => r.latest).length
+          return bRows - aRows
+        }
+        return 0
+      })
+  }, [productComparisons, q, catFilter, sortBy])
+
+  const loading = pL || cL || lL || priceLoading
+  const error   = pErr || cErr || lErr || priceErr
+
+  // Summary counts
+  const totalPriced   = productComparisons.filter(pc => pc.rows.filter(r => r.latest).length > 0).length
+  const undercutting  = productComparisons.filter(pc => pc.gapVsMinPct != null && pc.gapVsMinPct < -1).length
+  const overpricing   = productComparisons.filter(pc => pc.gapVsMinPct != null && pc.gapVsMinPct > 1).length
+  const noLinks       = productComparisons.filter(pc => pc.rows.length === 0).length
+
+  return (
+    <div>
+      <PageHeader
+        kicker="Live Intelligence"
+        title="Price Comparison"
+        subtitle="Every product side-by-side with every competitor's latest known price. Sort by opportunity to see where your prices are highest relative to the market."
+      />
+
+      {/* Summary strip */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        <StatTile
+          label="Products tracked" value={totalPriced}
+          hint={`of ${productComparisons.length} total`} tone="ink" />
+        <StatTile
+          label="Where you're cheaper" value={undercutting}
+          hint="Below the cheapest competitor" tone="emerald" />
+        <StatTile
+          label="Where you're pricier" value={overpricing}
+          hint="Above the cheapest competitor" tone="red" />
+        <StatTile
+          label="Unlinked" value={noLinks}
+          hint="No competitor URLs yet" tone="amber" />
+      </div>
+
+      {/* Filters */}
+      <div className="flex flex-col sm:flex-row gap-3 mb-4">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-400" size={14} />
+          <input className={`${inputCls} pl-9`}
+            placeholder="Search SKU, name, brand…"
+            value={q} onChange={e => setQ(e.target.value)} />
+        </div>
+        <select className={`${selectCls} sm:w-56`} value={catFilter} onChange={e => setCatFilter(e.target.value)}>
+          <option value="all">All categories</option>
+          {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+        <select className={`${selectCls} sm:w-56`} value={sortBy} onChange={e => setSortBy(e.target.value)}>
+          <option value="opportunity">🎯 Where you're most expensive</option>
+          <option value="threat">⚠️ Where you're most exposed</option>
+          <option value="coverage">📊 Most competitor coverage</option>
+          <option value="name">Name (A–Z)</option>
+        </select>
+      </div>
+
+      <ErrorBlock error={error} />
+
+      <Card className="overflow-hidden">
+        {loading ? <LoadingBlock text="Building comparison" /> : visible.length === 0 ? (
+          <Empty icon={GitCompare} title="Nothing to compare yet"
+            description="Add products, competitors, and link them on the Linked Items page. Prices will appear as they're scraped." />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-canvas-100 border-b border-ink-200">
+                <tr>
+                  <Th className="sticky left-0 bg-canvas-100 z-10 min-w-[240px]">Product</Th>
+                  <Th className="text-right">Your Price</Th>
+                  <Th className="text-right">Cheapest Rival</Th>
+                  <Th className="text-right">Gap vs Lowest</Th>
+                  {competitors.map(c => (
+                    <Th key={c.id} className="text-right min-w-[130px]">
+                      <div className="text-ink-800">{c.name}</div>
+                      <div className="text-[9px] text-ink-400 normal-case tracking-normal">{c.domain}</div>
+                    </Th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-ink-100">
+                {visible.map(pc => (
+                  <tr key={pc.product.id} className="hover:bg-canvas-100/60 transition-colors">
+                    <Td className="sticky left-0 bg-white hover:bg-canvas-100/60 z-10">
+                      <NavLink to="/prices" className="group inline-flex items-start gap-2">
+                        <div>
+                          <div className="font-semibold text-ink-900 text-[13.5px] group-hover:text-brand-700">
+                            {pc.product.name}
+                          </div>
+                          <div className="flex items-center gap-2 mt-0.5">
+                            <span className="font-mono text-[10.5px] text-ink-500">{pc.product.sku}</span>
+                            {pc.product.brand && <span className="text-[10.5px] text-ink-400">· {pc.product.brand}</span>}
+                          </div>
+                        </div>
+                      </NavLink>
+                    </Td>
+                    <Td className="text-right tabular-nums font-semibold text-ink-900">
+                      {pc.yourPrice != null
+                        ? `${symbolFor(pc.product.currency_code)} ${pc.yourPrice.toFixed(3)}`
+                        : <span className="text-ink-300">—</span>}
+                    </Td>
+                    <Td className="text-right tabular-nums text-ink-700">
+                      {pc.minPrice != null
+                        ? `${symbolFor(pc.product.currency_code)} ${pc.minPrice.toFixed(3)}`
+                        : <span className="text-ink-300">—</span>}
+                    </Td>
+                    <Td className="text-right">
+                      <GapPill pct={pc.gapVsMinPct} />
+                    </Td>
+                    {competitors.map(c => {
+                      const match = pc.rows.find(r => r.competitor.id === c.id)
+                      if (!match) return <Td key={c.id} className="text-right"><span className="text-ink-200">·</span></Td>
+                      const px = match.latest?.price
+                      if (px == null) return (
+                        <Td key={c.id} className="text-right">
+                          <span className="text-[11px] text-ink-400 italic">no data</span>
+                        </Td>
+                      )
+                      const cellPct = pc.yourPrice != null
+                        ? ((pc.yourPrice - Number(px)) / Number(px)) * 100
+                        : null
+                      return (
+                        <Td key={c.id} className="text-right tabular-nums">
+                          <div className="flex flex-col items-end gap-0.5">
+                            <a href={match.cp.url} target="_blank" rel="noopener noreferrer"
+                              className="text-ink-800 hover:text-brand-700 inline-flex items-center gap-1 group">
+                              {Number(px).toFixed(3)}
+                              <ExternalLink size={9} className="opacity-0 group-hover:opacity-100 transition-opacity" />
+                            </a>
+                            {cellPct != null && <MiniGap pct={cellPct} />}
+                          </div>
+                        </Td>
+                      )
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
+      <div className="mt-4 text-[11px] text-ink-400 flex items-center gap-4 flex-wrap">
+        <span className="inline-flex items-center gap-1.5">
+          <span className="w-2 h-2 rounded-full bg-emerald-500"/> You're cheaper
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <span className="w-2 h-2 rounded-full bg-red-500"/> You're pricier
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <span className="w-2 h-2 rounded-full bg-ink-300"/> Within 1%
+        </span>
+      </div>
+    </div>
+  )
+}
+
+function StatTile({ label, value, hint, tone = 'ink' }) {
+  const tones = {
+    ink:     { icon: 'bg-ink-100 text-ink-700 border-ink-200' },
+    emerald: { icon: 'bg-emerald-50 text-emerald-700 border-emerald-100' },
+    red:     { icon: 'bg-red-50 text-red-700 border-red-100' },
+    amber:   { icon: 'bg-amber-50 text-amber-800 border-amber-100' },
+  }
+  return (
+    <Card className="p-5">
+      <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-ink-500">{label}</div>
+      <div className="font-display text-[30px] leading-none text-ink-900 mt-2 tabular-nums">{value}</div>
+      <div className="text-[11px] text-ink-500 mt-1.5">{hint}</div>
+    </Card>
+  )
+}
+
+function GapPill({ pct }) {
+  if (pct == null) return <span className="text-ink-300">—</span>
+  const isFlat = Math.abs(pct) < 1
+  if (isFlat) return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-ink-100 text-ink-700 border border-ink-200">
+      <Minus size={10} /> Flat
+    </span>
+  )
+  const isOver = pct > 0
+  return (
+    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold border tabular-nums ${
+      isOver
+        ? 'bg-red-50 text-red-800 border-red-100'
+        : 'bg-emerald-50 text-emerald-800 border-emerald-100'
+    }`}>
+      {isOver ? <ArrowUpRight size={10}/> : <ArrowDownRight size={10}/>}
+      {isOver ? '+' : ''}{pct.toFixed(1)}%
+    </span>
+  )
+}
+
+function MiniGap({ pct }) {
+  if (Math.abs(pct) < 1) return <span className="text-[10px] text-ink-400 tabular-nums">flat</span>
+  const isOver = pct > 0
+  return (
+    <span className={`text-[10px] font-semibold tabular-nums ${isOver ? 'text-red-700' : 'text-emerald-700'}`}>
+      {isOver ? '+' : ''}{pct.toFixed(1)}%
+    </span>
+  )
+}
+
+function symbolFor(code) {
+  const map = { KWD:'KD', USD:'$', EUR:'€', AED:'AED', SAR:'SAR', GBP:'£' }
+  return map[code] || code || ''
+}
+
+function Th({ children, className = '' }) {
+  return <th className={`px-4 py-3 text-left text-[10px] font-semibold text-ink-500 uppercase tracking-[0.12em] ${className}`}>{children}</th>
+}
+function Td({ children, className = '' }) {
+  return <td className={`px-4 py-3.5 text-sm text-ink-800 ${className}`}>{children}</td>
+}

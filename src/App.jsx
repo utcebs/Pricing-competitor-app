@@ -13,6 +13,7 @@ const Competitors        = lazy(() => import('./pages/Competitors'))
 const CompetitorProducts = lazy(() => import('./pages/CompetitorProducts'))
 const PriceEntry         = lazy(() => import('./pages/PriceEntry'))
 const PriceTrends        = lazy(() => import('./pages/PriceTrends'))
+const Comparison         = lazy(() => import('./pages/Comparison'))
 const Categories         = lazy(() => import('./pages/Categories'))
 const Users              = lazy(() => import('./pages/Users'))
 const Scrapers           = lazy(() => import('./pages/Scrapers'))
@@ -39,6 +40,7 @@ export default function App() {
             <Route path="/competitor-products" element={<CompetitorProducts />} />
             <Route path="/prices"              element={<PriceTrends />} />
             <Route path="/prices/new"          element={<PriceEntry />} />
+            <Route path="/comparison"          element={<Comparison />} />
             <Route path="/scrapers"            element={<Scrapers />} />
             <Route path="/matches"             element={<MatchReview />} />
             <Route path="/alerts"              element={<Alerts />} />

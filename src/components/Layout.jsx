@@ -2,7 +2,7 @@ import { NavLink, Outlet, Navigate } from 'react-router-dom'
 import {
   LayoutDashboard, Package, Building2, LineChart, Bell,
   FileBarChart, Settings, LogOut, Link2, DollarSign,
-  FolderTree, UserCog, Play, Sparkles, Repeat, Plug,
+  FolderTree, UserCog, Play, Sparkles, Repeat, Plug, GitCompare,
 } from 'lucide-react'
 import { useAuth } from '../lib/auth'
 import { setLanguage } from '../lib/i18n'
@@ -13,6 +13,7 @@ const PRIMARY_NAV = [
   { path: '/products',            key: 'nav.products',     icon: Package },
   { path: '/competitors',         key: 'nav.competitors',  icon: Building2 },
   { path: '/competitor-products', key: 'nav.linked',       icon: Link2 },
+  { path: '/comparison',          key: 'nav.comparison',   icon: GitCompare },
   { path: '/prices',              key: 'nav.trends',       icon: LineChart },
   { path: '/prices/new',          key: 'nav.entry',        icon: DollarSign },
 ]
