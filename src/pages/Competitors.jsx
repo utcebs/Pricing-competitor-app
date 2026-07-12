@@ -156,9 +156,14 @@ function CompetitorForm({ open, competitor, onClose, onSaved }) {
       const payload = { ...form }
       // Normalise domain: strip protocol + trailing slash
       if (payload.domain) payload.domain = payload.domain.replace(/^https?:\/\//, '').replace(/\/$/, '')
-      // Parse scrape_config JSON — fail early on malformed input
+      // Parse scrape_config JSON — fail early on malformed input.
+      // Strip empty-string values so the worker falls through to its
+      // built-in selector cascade instead of trying to match "" literally.
       try {
-        payload.scrape_config = scrapeConfigStr.trim() ? JSON.parse(scrapeConfigStr) : {}
+        const parsed = scrapeConfigStr.trim() ? JSON.parse(scrapeConfigStr) : {}
+        payload.scrape_config = Object.fromEntries(
+          Object.entries(parsed).filter(([, v]) => v !== '' && v != null)
+        )
       } catch (e) {
         throw new Error('Scrape config JSON is invalid: ' + e.message)
       }

@@ -13,6 +13,13 @@ on:
   schedule:
     - cron: '*/5 * * * *'
   workflow_dispatch:
+  # Kick a tick immediately when worker code or seed data changes.
+  # Also useful as a "force run now" without needing gh CLI.
+  push:
+    branches: [main]
+    paths:
+      - 'worker/**'
+      - '.github/workflows/worker-tick.yml'
 
 # Skip if a previous tick is still running — prevents queue thrashing.
 concurrency:
