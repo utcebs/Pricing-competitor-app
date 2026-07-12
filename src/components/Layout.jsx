@@ -7,6 +7,7 @@ import {
 import { useAuth } from '../lib/auth'
 import { setLanguage } from '../lib/i18n'
 import { useTranslation } from 'react-i18next'
+import ScrapeStatusPill from './ScrapeStatusPill'
 
 const PRIMARY_NAV = [
   { path: '/',                    key: 'nav.dashboard',    icon: LayoutDashboard },
@@ -119,10 +120,11 @@ export default function Layout() {
       </aside>
 
       {/* ── Main ────────────────────────────────────────── */}
-      <main className="flex-1 overflow-y-auto">
+      <main className="flex-1 overflow-y-auto relative">
         <div className="max-w-[1240px] mx-auto px-8 lg:px-12 py-10">
           <Outlet />
         </div>
+        <ScrapeStatusPill />
       </main>
     </div>
   )
