@@ -342,3 +342,4 @@ function parseStock(text) {
   if (t.includes('out of stock') || t.includes('unavailable') || t.includes('sold out') || t.includes('out-of-stock')) return false
   return null
 }
+// scrape verification pass @ 2026-07-12T13:14:34Z
