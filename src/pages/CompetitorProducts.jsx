@@ -186,7 +186,7 @@ export default function CompetitorProducts() {
 
 function MatchBadge({ method, confidence }) {
   if (method === 'manual')   return <Badge variant="brand">Manual</Badge>
-  if (method === 'auto')     return <Badge variant="amber">Auto {confidence ? `· ${Math.round(confidence * 100)}%` : ''}</Badge>
+  if (method === 'auto')     return <Badge variant="amber">Auto-found · {confidence ? `${Math.round(confidence * 100)}%` : 'review'}</Badge>
   if (method === 'category') return <Badge variant="green">Category</Badge>
   return <Badge>None</Badge>
 }

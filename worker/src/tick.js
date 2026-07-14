@@ -9,6 +9,7 @@
 import 'dotenv/config'
 import { supabase } from './supabase.js'
 import { runScrapeJob } from './scraper.js'
+import { runFindUrlsJob } from './find-urls.js'
 import { checkAlertRules } from './alerts.js'
 import { evaluateRepricingRules } from './repricing.js'
 import { syncApprovedProposals } from './sync.js'
@@ -17,7 +18,20 @@ async function tick() {
   const started = Date.now()
   console.log('[tick] start @', new Date().toISOString())
 
-  // 1) Consume queued scrape runs
+  // 0) URL-finder jobs first — they may enqueue scrape runs that we'll
+  //    then consume in step 1, so a single tick can find+scrape.
+  const { data: findJobs } = await supabase
+    .from('url_find_jobs')
+    .select('*')
+    .eq('status', 'queued')
+    .order('created_at', { ascending: true })
+    .limit(3)
+  if (findJobs?.length) {
+    console.log(`[tick] processing ${findJobs.length} queued URL-find job(s)`)
+    for (const job of findJobs) await runFindUrlsJob(job)
+  }
+
+  // 1) Consume queued scrape runs (including any just-enqueued by URL-find)
   const { data: queued } = await supabase
     .from('scrape_runs')
     .select('*')

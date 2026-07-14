@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Plus, Pencil, Trash2, Package, Upload } from 'lucide-react'
+import { Plus, Pencil, Trash2, Package, Upload, Sparkles, Link2Off, Link2 } from 'lucide-react'
 import { useTable, saveRow, deleteRow } from '../lib/db'
 import { useAuth } from '../lib/auth'
 import { supabase } from '../supabaseClient'
@@ -10,14 +10,41 @@ import {
 import BulkUpload from '../components/BulkUpload'
 
 export default function Products() {
-  const { isManager } = useAuth()
+  const { isManager, user } = useAuth()
   const { rows: products, loading, error, refresh } = useTable('products', { order: ['name', { ascending: true }] })
   const { rows: categories } = useTable('categories', { order: ['name', { ascending: true }] })
   const { rows: currencies } = useTable('currencies')
+  const { rows: cps, refresh: refreshCps } = useTable('competitor_products')
 
   const [editing, setEditing] = useState(null)   // null | 'new' | product object
   const [toDelete, setToDelete] = useState(null)
   const [bulkOpen, setBulkOpen] = useState(false)
+  const [findingId, setFindingId] = useState(null)
+  const [toast, setToast] = useState('')
+
+  // count links per product
+  const linkCounts = {}
+  for (const c of cps) linkCounts[c.product_id] = (linkCounts[c.product_id] || 0) + 1
+
+  const findUrlsFor = async (product) => {
+    setFindingId(product.id); setToast('')
+    const { error } = await supabase.from('url_find_jobs').insert({
+      product_id: product.id,
+      triggered_by: user?.id,
+    })
+    setFindingId(null)
+    if (error) {
+      if (error.message?.includes('url_find_jobs')) {
+        setToast('URL finder not ready — the DB migration hasn\'t been run yet. Ask admin to run supabase/migrations/url-finder.sql.')
+      } else {
+        setToast('Failed to queue: ' + error.message)
+      }
+      setTimeout(() => setToast(''), 8000)
+      return
+    }
+    setToast(`Searching for "${product.name}" URLs across all active competitors. Results land within ~5 minutes.`)
+    setTimeout(() => { setToast(''); refreshCps() }, 8000)
+  }
 
   const openNew = () => setEditing({})
   const openEdit = (p) => setEditing(p)
@@ -41,6 +68,12 @@ export default function Products() {
 
       <ErrorBlock error={error} onRetry={refresh} />
 
+      {toast && (
+        <div className="mb-4 text-[12.5px] px-3 py-2 bg-brand-50 border border-brand-100 rounded-lg text-brand-800 inline-flex items-center gap-2">
+          <Sparkles size={13} /> {toast}
+        </div>
+      )}
+
       <Card>
         {loading ? (
           <LoadingBlock />
@@ -61,7 +94,8 @@ export default function Products() {
                   <Th className="text-right">Min</Th>
                   <Th className="text-right">Current</Th>
                   <Th>Own</Th>
-                  {isManager && <Th></Th>}
+                  <Th>Tracking</Th>
+                  {isManager && <Th className="text-right">Actions</Th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-ink-100">
@@ -81,9 +115,28 @@ export default function Products() {
                       {p.current_price != null ? `${currencySymbol(p.currency_code)} ${Number(p.current_price).toFixed(3)}` : '—'}
                     </Td>
                     <Td>{p.is_own_brand && <Badge variant="brand">Own</Badge>}</Td>
+                    <Td>
+                      {linkCounts[p.id] > 0 ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] text-emerald-700 font-semibold">
+                          <Link2 size={11} /> {linkCounts[p.id]} linked
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-[11px] text-red-600 font-semibold">
+                          <Link2Off size={11} /> not tracked
+                        </span>
+                      )}
+                    </Td>
                     {isManager && (
                       <Td>
-                        <div className="flex items-center gap-1">
+                        <div className="flex items-center gap-1 justify-end">
+                          <button
+                            onClick={() => findUrlsFor(p)}
+                            disabled={findingId === p.id}
+                            title="Auto-find this product on every competitor site"
+                            className="p-1.5 rounded text-ink-400 hover:text-brand-600 hover:bg-brand-50 disabled:opacity-50 inline-flex items-center gap-1">
+                            <Sparkles size={14} />
+                            <span className="text-[11px] font-medium hidden md:inline">Find URLs</span>
+                          </button>
                           <button onClick={() => openEdit(p)} className="p-1.5 rounded text-ink-400 hover:text-brand-600 hover:bg-brand-50"><Pencil size={14} /></button>
                           <button onClick={() => setToDelete(p)} className="p-1.5 rounded text-ink-400 hover:text-red-600 hover:bg-red-50"><Trash2 size={14} /></button>
                         </div>
