@@ -1,13 +1,13 @@
 import { useState, useEffect, useMemo } from 'react'
 import {
   Play, RefreshCw, CheckCircle2, Clock, XCircle, ExternalLink,
-  Zap, Activity, Loader2,
+  Zap, Activity, Loader2, ChevronRight, Code,
 } from 'lucide-react'
 import { supabase } from '../supabaseClient'
 import { useTable } from '../lib/db'
 import { useAuth } from '../lib/auth'
 import {
-  PageHeader, Card, Button, Empty, LoadingBlock, ErrorBlock, Badge,
+  PageHeader, Card, Button, Modal, Empty, LoadingBlock, ErrorBlock, Badge,
 } from '../components/UI'
 
 export default function Scrapers() {
@@ -20,6 +20,7 @@ export default function Scrapers() {
   const [runningId, setRunningId] = useState(null)
   const [msg, setMsg] = useState('')
   const [jobsByRun, setJobsByRun] = useState({})  // { run_id: [scrape_jobs...] }
+  const [openRunId, setOpenRunId] = useState(null)   // detail drawer target
 
   // Expected total URLs per competitor (all active competitor_products).
   const expectedByCompetitor = useMemo(() => {
@@ -202,6 +203,7 @@ export default function Scrapers() {
                   <Th>Status</Th><Th>Competitor</Th><Th>Trigger</Th>
                   <Th className="text-right">Scraped</Th><Th className="text-right">Failed</Th>
                   <Th>Started</Th><Th>Finished</Th><Th className="text-right">Duration</Th>
+                  <Th></Th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-ink-100">
@@ -210,7 +212,9 @@ export default function Scrapers() {
                     ? Math.round((new Date(r.finished_at) - new Date(r.started_at)) / 1000)
                     : null
                   return (
-                    <tr key={r.id} className="hover:bg-canvas-100/60 transition-colors">
+                    <tr key={r.id}
+                        onClick={() => setOpenRunId(r.id)}
+                        className="hover:bg-brand-50/40 transition-colors cursor-pointer group">
                       <Td><StatusBadge status={r.status} /></Td>
                       <Td className="font-medium">{compById[r.competitor_id]?.name || `#${r.competitor_id}`}</Td>
                       <Td className="text-ink-500 text-xs capitalize">{r.triggered_kind}</Td>
@@ -219,6 +223,9 @@ export default function Scrapers() {
                       <Td className="text-ink-500 text-xs">{fmtDateTime(r.started_at)}</Td>
                       <Td className="text-ink-500 text-xs">{fmtDateTime(r.finished_at)}</Td>
                       <Td className="text-right text-ink-500 text-xs tabular-nums">{dur != null ? `${dur}s` : '—'}</Td>
+                      <Td className="text-right">
+                        <ChevronRight size={14} className="text-ink-300 group-hover:text-brand-600 group-hover:translate-x-0.5 transition-all" />
+                      </Td>
                     </tr>
                   )
                 })}
@@ -227,8 +234,150 @@ export default function Scrapers() {
           </div>
         )}
       </Card>
+
+      <RunDetailModal
+        runId={openRunId}
+        run={runs.find(r => r.id === openRunId)}
+        competitor={runs.find(r => r.id === openRunId) ? compById[runs.find(r => r.id === openRunId).competitor_id] : null}
+        onClose={() => setOpenRunId(null)}
+      />
     </div>
   )
+}
+
+/* ── Run detail drawer — per-URL scrape jobs + HTML sample ─────── */
+function RunDetailModal({ runId, run, competitor, onClose }) {
+  const [jobs, setJobs] = useState([])
+  const [cpMap, setCpMap] = useState({})
+  const [loading, setLoading] = useState(false)
+  const [expandedSample, setExpandedSample] = useState(null)
+
+  useEffect(() => {
+    if (!runId) return
+    setLoading(true); setExpandedSample(null)
+    Promise.all([
+      supabase.from('scrape_jobs').select('*').eq('scrape_run_id', runId).order('created_at', { ascending: true }),
+      supabase.from('competitor_products').select('id,name,url').eq('competitor_id', run?.competitor_id || 0),
+    ]).then(([jobsRes, cpsRes]) => {
+      setJobs(jobsRes.data || [])
+      setCpMap(Object.fromEntries((cpsRes.data || []).map(c => [c.id, c])))
+      setLoading(false)
+    })
+  }, [runId, run?.competitor_id])
+
+  if (!runId) return null
+
+  const ok = jobs.filter(j => j.status === 'ok').length
+  const notFound = jobs.filter(j => j.status === 'not_found').length
+  const errored = jobs.filter(j => j.status === 'error' || j.status === 'blocked').length
+  const totalDur = jobs.reduce((sum, j) => sum + (j.duration_ms || 0), 0)
+
+  return (
+    <Modal
+      open={!!runId} onClose={onClose} wide
+      title={`Scrape run · ${competitor?.name || 'Unknown'}`}
+      subtitle={run ? `${fmtDateTime(run.created_at)} · ${run.triggered_kind} trigger` : ''}
+    >
+      {/* Summary row */}
+      <div className="grid grid-cols-4 gap-3 mb-5">
+        <SumTile label="Prices found" value={ok} tone="emerald" />
+        <SumTile label="No price" value={notFound} tone="amber" />
+        <SumTile label="Errors" value={errored} tone="red" />
+        <SumTile label="Total time" value={`${(totalDur / 1000).toFixed(1)}s`} tone="ink" />
+      </div>
+
+      {loading ? <LoadingBlock text="Loading jobs" /> : jobs.length === 0 ? (
+        <div className="text-center py-10 text-ink-500 text-sm">
+          {run?.status === 'queued' ? 'Job hasn\'t started yet.' : 'No per-URL jobs recorded for this run.'}
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {jobs.map(j => {
+            const cp = cpMap[j.competitor_product_id]
+            const isExpanded = expandedSample === j.id
+            const hasSample = j.raw_html_sample && j.raw_html_sample.length > 0
+            return (
+              <div key={j.id} className="border border-ink-100 rounded-xl overflow-hidden">
+                <div className="p-3.5 flex items-start gap-3">
+                  <div className="flex-shrink-0 pt-0.5">
+                    <JobStatusIcon status={j.status} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-baseline gap-2">
+                      <div className="text-[13px] font-semibold text-ink-900 truncate">
+                        {cp?.name || `Competitor product #${j.competitor_product_id}`}
+                      </div>
+                      {j.price_extracted != null && (
+                        <div className="font-display text-[16px] tabular-nums text-emerald-700 flex-shrink-0">
+                          KD {Number(j.price_extracted).toFixed(3)}
+                        </div>
+                      )}
+                    </div>
+                    {cp?.url && (
+                      <a href={cp.url} target="_blank" rel="noopener noreferrer"
+                        className="text-[11px] text-brand-600 hover:underline inline-flex items-center gap-1 mt-1 break-all">
+                        {cp.url.length > 90 ? cp.url.slice(0, 90) + '…' : cp.url}
+                        <ExternalLink size={9} />
+                      </a>
+                    )}
+                    <div className="flex items-center gap-3 mt-1.5 text-[11px] text-ink-500 tabular-nums">
+                      <span>{j.duration_ms ? `${(j.duration_ms / 1000).toFixed(1)}s` : '—'}</span>
+                      {j.in_stock_extracted === true  && <Badge variant="green">In stock</Badge>}
+                      {j.in_stock_extracted === false && <Badge variant="red">Out of stock</Badge>}
+                    </div>
+                    {j.error_message && (
+                      <div className="mt-2 text-[11.5px] text-red-800 bg-red-50 border border-red-100 rounded-lg px-2.5 py-1.5">
+                        {j.error_message}
+                      </div>
+                    )}
+                  </div>
+                  {hasSample && (
+                    <button onClick={() => setExpandedSample(isExpanded ? null : j.id)}
+                      className="flex-shrink-0 text-[11px] text-ink-500 hover:text-brand-700 inline-flex items-center gap-1 border border-ink-200 rounded-lg px-2 py-1 hover:border-brand-300 hover:bg-brand-50">
+                      <Code size={11} /> {isExpanded ? 'Hide' : 'HTML'}
+                    </button>
+                  )}
+                </div>
+                {isExpanded && (
+                  <div className="border-t border-ink-100 bg-ink-900 px-4 py-3 font-mono text-[10.5px] text-ink-300 overflow-x-auto max-h-80 overflow-y-auto whitespace-pre-wrap break-all">
+                    {j.raw_html_sample}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {run?.error_summary && (
+        <div className="mt-4 text-[12px] text-red-800 bg-red-50 border border-red-100 rounded-lg px-3 py-2">
+          <span className="font-semibold">Run summary error: </span>{run.error_summary}
+        </div>
+      )}
+    </Modal>
+  )
+}
+
+function SumTile({ label, value, tone = 'ink' }) {
+  const tones = {
+    emerald: 'text-emerald-700 bg-emerald-50 border-emerald-100',
+    red:     'text-red-700 bg-red-50 border-red-100',
+    amber:   'text-amber-800 bg-amber-50 border-amber-100',
+    ink:     'text-ink-800 bg-ink-100 border-ink-200',
+  }
+  return (
+    <div className={`rounded-lg border p-3 ${tones[tone]}`}>
+      <div className="text-[10px] uppercase tracking-[0.12em] font-semibold opacity-80">{label}</div>
+      <div className="font-display text-[22px] leading-none mt-1 tabular-nums">{value}</div>
+    </div>
+  )
+}
+
+function JobStatusIcon({ status }) {
+  if (status === 'ok')       return <div className="w-6 h-6 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center"><CheckCircle2 size={13} /></div>
+  if (status === 'not_found')return <div className="w-6 h-6 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center"><XCircle size={13} /></div>
+  if (status === 'error')    return <div className="w-6 h-6 rounded-full bg-red-100 text-red-700 flex items-center justify-center"><XCircle size={13} /></div>
+  return <div className="w-6 h-6 rounded-full bg-ink-100 text-ink-500 flex items-center justify-center"><Clock size={13} /></div>
 }
 
 /* ── Live-run row with progress bar ────────────────────── */

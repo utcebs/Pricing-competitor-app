@@ -1,8 +1,9 @@
-import { useState, useEffect, useMemo } from 'react'
-import { GitCompare, ArrowUpRight, ArrowDownRight, Minus, ExternalLink, Search, RefreshCw } from 'lucide-react'
+import { useState, useEffect, useMemo, useRef } from 'react'
+import { GitCompare, ArrowUpRight, ArrowDownRight, Minus, ExternalLink, Search, RefreshCw, Zap } from 'lucide-react'
 import { NavLink } from 'react-router-dom'
 import { supabase } from '../supabaseClient'
 import { useTable } from '../lib/db'
+import { useAuth } from '../lib/auth'
 import {
   PageHeader, Card, Empty, LoadingBlock, ErrorBlock, Badge, Button,
   inputCls, selectCls,
@@ -15,13 +16,18 @@ import {
  * expensive. Sort by biggest opportunity/threat.
  */
 export default function Comparison() {
-  const { rows: products,    loading: pL, error: pErr } = useTable('products',    { order: ['name', { ascending: true }] })
-  const { rows: competitors, loading: cL, error: cErr } = useTable('competitors', { eq: ['is_active', true], order: ['name', { ascending: true }] })
-  const { rows: cps,         loading: lL, error: lErr } = useTable('competitor_products')
+  const { user, isManager } = useAuth()
+  const { rows: products,    loading: pL, error: pErr, refresh: refreshProducts } = useTable('products',    { order: ['name', { ascending: true }] })
+  const { rows: competitors, loading: cL, error: cErr, refresh: refreshCompetitors } = useTable('competitors', { eq: ['is_active', true], order: ['name', { ascending: true }] })
+  const { rows: cps,         loading: lL, error: lErr, refresh: refreshCps } = useTable('competitor_products')
 
   const [latestPrices, setLatestPrices] = useState({})   // { competitor_product_id: { price, captured_at, in_stock } }
   const [priceLoading, setPriceLoading] = useState(false)
   const [priceErr, setPriceErr] = useState('')
+  const [refreshTick, setRefreshTick] = useState(0)   // bump to re-run the price query
+  const [lastRefreshed, setLastRefreshed] = useState(null)
+  const [rescraping, setRescraping] = useState(false)
+  const [rescrapeMsg, setRescrapeMsg] = useState('')
 
   const [q,        setQ]        = useState('')
   const [catFilter,setCatFilter]= useState('all')
@@ -32,10 +38,8 @@ export default function Comparison() {
   // Pull latest price for every competitor_product in ONE query.
   const cpIds = cps.map(c => c.id)
   useEffect(() => {
-    if (cpIds.length === 0) { setLatestPrices({}); return }
+    if (cpIds.length === 0) { setLatestPrices({}); setLastRefreshed(new Date()); return }
     setPriceLoading(true); setPriceErr('')
-    // Use PostgreSQL DISTINCT ON via ordering: latest row per competitor_product_id.
-    // Simpler approach: pull all of last 60 days then reduce in JS.
     const from = new Date(); from.setDate(from.getDate() - 60)
     supabase.from('price_history')
       .select('competitor_product_id, price, currency_code, captured_at')
@@ -44,6 +48,7 @@ export default function Comparison() {
       .order('captured_at', { ascending: false })
       .then(({ data, error }) => {
         setPriceLoading(false)
+        setLastRefreshed(new Date())
         if (error) { setPriceErr(error.message); return }
         const seen = {}
         for (const row of (data || [])) {
@@ -51,7 +56,25 @@ export default function Comparison() {
         }
         setLatestPrices(seen)
       })
-  }, [cpIds.join(',')])
+  }, [cpIds.join(','), refreshTick])
+
+  const refreshAll = () => {
+    refreshProducts(); refreshCompetitors(); refreshCps()
+    setRefreshTick(t => t + 1)
+  }
+
+  const rescrapeAll = async () => {
+    setRescraping(true); setRescrapeMsg('')
+    const rows = competitors.map(c => ({
+      competitor_id: c.id, status: 'queued',
+      triggered_by: user?.id, triggered_kind: 'manual',
+    }))
+    const { error } = await supabase.from('scrape_runs').insert(rows)
+    setRescraping(false)
+    if (error) { setRescrapeMsg('Queue failed: ' + error.message); return }
+    setRescrapeMsg(`Queued ${rows.length} scrape${rows.length === 1 ? '' : 's'}. New prices land within ~5 minutes.`)
+    setTimeout(() => setRescrapeMsg(''), 8000)
+  }
 
   // Build a lookup: productId → [{ competitor, cp, latest }]
   const productComparisons = useMemo(() => {
@@ -123,7 +146,31 @@ export default function Comparison() {
         kicker="Live Intelligence"
         title="Price Comparison"
         subtitle="Every product side-by-side with every competitor's latest known price. Sort by opportunity to see where your prices are highest relative to the market."
+        action={
+          <div className="flex items-center gap-2">
+            <div className="text-[11px] text-ink-500 mr-1 tabular-nums hidden sm:block">
+              {lastRefreshed
+                ? `Refreshed ${relTime(lastRefreshed)}`
+                : 'Not refreshed yet'}
+            </div>
+            <Button variant="secondary" onClick={refreshAll} busy={priceLoading} title="Reload from database (uses latest scraped values)">
+              <RefreshCw size={14} /> Refresh
+            </Button>
+            {isManager && (
+              <Button variant="gold" onClick={rescrapeAll} busy={rescraping}
+                title="Queue a fresh scrape on every competitor — takes ~5 min">
+                <Zap size={14} /> Re-scrape all
+              </Button>
+            )}
+          </div>
+        }
       />
+
+      {rescrapeMsg && (
+        <div className="mb-4 text-[12.5px] px-3 py-2 bg-brand-50 border border-brand-100 rounded-lg text-brand-800 inline-flex items-center gap-2">
+          <Zap size={13} /> {rescrapeMsg}
+        </div>
+      )}
 
       {/* Summary strip */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
@@ -311,6 +358,15 @@ function MiniGap({ pct }) {
 function symbolFor(code) {
   const map = { KWD:'KD', USD:'$', EUR:'€', AED:'AED', SAR:'SAR', GBP:'£' }
   return map[code] || code || ''
+}
+
+function relTime(d) {
+  const s = Math.floor((Date.now() - d.getTime()) / 1000)
+  if (s < 5)     return 'just now'
+  if (s < 60)    return `${s}s ago`
+  if (s < 3600)  return `${Math.floor(s / 60)}m ago`
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`
+  return d.toLocaleDateString()
 }
 
 function Th({ children, className = '' }) {
