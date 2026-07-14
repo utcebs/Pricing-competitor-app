@@ -1,3 +1,4 @@
+// Auto-URL finder — Playwright search + DDG fallback
 import { chromium } from 'playwright'
 import { supabase } from './supabase.js'
 
