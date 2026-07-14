@@ -31,7 +31,9 @@ const DEFAULT_RESULT_SELECTORS = [
   '[data-testid*="product"] a',
 ]
 
-const DDG_RESULT_SELECTOR = '.results--main a.result__a, a[data-testid="result-title-a"], a.eVNpHGjtxRBq_gLOfGDr'
+// DuckDuckGo HTML-only endpoint uses `.result__a` for every result link,
+// wrapping the real URL in `//duckduckgo.com/l/?uddg=<encoded>`.
+const DDG_RESULT_SELECTOR = 'a.result__a, a[data-testid="result-title-a"]'
 
 export async function runFindUrlsJob(job) {
   console.log(`[find-urls] starting job ${job.id} for product ${job.product_id}`)
