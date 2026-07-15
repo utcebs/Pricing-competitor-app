@@ -357,48 +357,85 @@ function parseStock(text) {
 
 /**
  * Extract a product image URL. Priority:
- *   1. <meta property="og:image">
- *   2. <meta name="twitter:image">
- *   3. JSON-LD product.image (from schema.org markup)
- *   4. First large-ish <img> whose src looks like a product image
- * Returns an absolute URL string, or null.
+ *   1. <link rel="preload" as="image"> — modern sites preload the hero
+ *      product image; usually the CDN-optimised product photo
+ *   2. JSON-LD product.image (schema.org — most reliable when present)
+ *   3. <meta property="og:image"> — but only if it doesn't look like a logo
+ *   4. <meta name="twitter:image"> — same filter
+ *   5. Largest <img> on the page with a plausible product URL — filtered
+ *      to reject logos, icons, favicons, sprites, and small dimensions
+ *
+ * REJECTS any URL that looks like a logo/icon/placeholder — the site's
+ * own header logo is often what fills og:image on non-product pages,
+ * so we filter aggressively.
  */
 async function extractImage(page, pageUrl) {
   try {
-    // 1. og:image (strongest signal, works on nearly every modern site)
-    const og = await page.$eval(
-      'meta[property="og:image:secure_url"], meta[property="og:image"], meta[name="og:image"]',
-      el => el.getAttribute('content')
+    // 1. <link rel="preload" as="image"> — Next.js / modern SPAs preload hero
+    const preload = await page.$eval(
+      'link[rel="preload"][as="image"]',
+      el => el.getAttribute('href') || el.getAttribute('imagesrcset')?.split(',')[0]?.trim().split(' ')[0]
     ).catch(() => null)
-    if (og) return absoluteUrl(og, pageUrl)
+    if (preload && !isJunkImageUrl(preload)) return absoluteUrl(preload, pageUrl)
 
-    // 2. twitter:image
-    const tw = await page.$eval(
-      'meta[name="twitter:image"], meta[property="twitter:image"]',
-      el => el.getAttribute('content')
-    ).catch(() => null)
-    if (tw) return absoluteUrl(tw, pageUrl)
-
-    // 3. JSON-LD product.image
+    // 2. JSON-LD Product.image (usually a real product photo URL)
     const jsonld = await page.$$eval(
       'script[type="application/ld+json"]',
       scripts => scripts.map(s => s.textContent).join('\n')
     ).catch(() => '')
     const ldMatch = jsonld.match(/"image"\s*:\s*"([^"]+)"/) ||
                     jsonld.match(/"image"\s*:\s*\[\s*"([^"]+)"/)
-    if (ldMatch) return absoluteUrl(ldMatch[1], pageUrl)
+    if (ldMatch && !isJunkImageUrl(ldMatch[1])) return absoluteUrl(ldMatch[1], pageUrl)
 
-    // 4. First plausible product <img>
-    const src = await page.$eval(
-      'img[alt*="product" i], img.product-image, img.product-photo, .product-image img, .product-gallery img, [class*="product"] img',
-      el => el.currentSrc || el.src
+    // 3. og:image — but skip if it's a logo/icon
+    const og = await page.$eval(
+      'meta[property="og:image:secure_url"], meta[property="og:image"], meta[name="og:image"]',
+      el => el.getAttribute('content')
     ).catch(() => null)
-    if (src) return absoluteUrl(src, pageUrl)
+    if (og && !isJunkImageUrl(og)) return absoluteUrl(og, pageUrl)
+
+    // 4. twitter:image — same filter
+    const tw = await page.$eval(
+      'meta[name="twitter:image"], meta[property="twitter:image"]',
+      el => el.getAttribute('content')
+    ).catch(() => null)
+    if (tw && !isJunkImageUrl(tw)) return absoluteUrl(tw, pageUrl)
+
+    // 5. Largest <img> on the page with a plausible URL — reject icons
+    const largest = await page.evaluate(() => {
+      const imgs = Array.from(document.querySelectorAll('img'))
+      let best = null, bestSize = 0
+      for (const img of imgs) {
+        const w = img.naturalWidth || img.clientWidth || 0
+        const h = img.naturalHeight || img.clientHeight || 0
+        const size = w * h
+        // Reject anything smaller than ~180×180 (typical logo/icon dimensions)
+        if (size < 32000) continue
+        const src = img.currentSrc || img.src
+        if (!src) continue
+        if (size > bestSize) { best = src; bestSize = size }
+      }
+      return best
+    }).catch(() => null)
+    if (largest && !isJunkImageUrl(largest)) return absoluteUrl(largest, pageUrl)
 
     return null
   } catch {
     return null
   }
+}
+
+function isJunkImageUrl(url) {
+  if (!url) return true
+  const u = url.toLowerCase()
+  // Reject anything that clearly isn't a product photo
+  const junkPatterns = [
+    'logo', 'favicon', 'sprite', 'placeholder', 'default-',
+    '/icons/', '/icon/', 'default.png', 'default.jpg',
+    'banner', 'hero-banner', 'og-default', 'og_default',
+    'data:image',   // inline base64 icons
+  ]
+  return junkPatterns.some(p => u.includes(p))
 }
 
 function absoluteUrl(maybeRelative, base) {
