@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { Plus, Pencil, Trash2, Package, Upload, Sparkles, Link2Off, Link2 } from 'lucide-react'
+import { useState, useEffect, useMemo } from 'react'
+import { Plus, Pencil, Trash2, Package, Upload, Sparkles, Link2Off, Link2, Search } from 'lucide-react'
 import { useTable, saveRow, deleteRow } from '../lib/db'
 import { useAuth } from '../lib/auth'
 import { supabase } from '../supabaseClient'
@@ -22,9 +22,40 @@ export default function Products() {
   const [findingId, setFindingId] = useState(null)
   const [toast, setToast] = useState('')
 
+  // Filters
+  const [q, setQ] = useState('')
+  const [catFilter, setCatFilter] = useState('all')
+  const [brandFilter, setBrandFilter] = useState('all')
+  const [trackingFilter, setTrackingFilter] = useState('all')
+
   // count links per product
   const linkCounts = {}
   for (const c of cps) linkCounts[c.product_id] = (linkCounts[c.product_id] || 0) + 1
+
+  // Unique brand list from the current products
+  const brands = useMemo(() => {
+    const set = new Set()
+    for (const p of products) if (p.brand?.trim()) set.add(p.brand.trim())
+    return [...set].sort((a, b) => a.localeCompare(b))
+  }, [products])
+
+  const filtered = useMemo(() => {
+    const query = q.trim().toLowerCase()
+    return products.filter(p => {
+      if (query) {
+        const hay = `${p.name} ${p.sku || ''} ${p.brand || ''}`.toLowerCase()
+        if (!hay.includes(query)) return false
+      }
+      if (catFilter !== 'all') {
+        if (catFilter === 'null') { if (p.category_id != null) return false }
+        else if (String(p.category_id) !== catFilter) return false
+      }
+      if (brandFilter !== 'all' && (p.brand || '') !== brandFilter) return false
+      if (trackingFilter === 'tracked' && !linkCounts[p.id]) return false
+      if (trackingFilter === 'untracked' && linkCounts[p.id]) return false
+      return true
+    })
+  }, [products, q, catFilter, brandFilter, trackingFilter, linkCounts])
 
   const findUrlsFor = async (product) => {
     setFindingId(product.id); setToast('')
@@ -74,6 +105,43 @@ export default function Products() {
         </div>
       )}
 
+      {/* Filters */}
+      <div className="flex flex-col sm:flex-row gap-3 mb-4">
+        <div className="relative flex-1 min-w-0">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-400" size={14} />
+          <input className={`${inputCls} pl-9`}
+            placeholder="Search name, SKU, or brand…"
+            value={q} onChange={e => setQ(e.target.value)} />
+        </div>
+        <select className={`${selectCls} sm:w-48`} value={catFilter} onChange={e => setCatFilter(e.target.value)}>
+          <option value="all">All categories</option>
+          {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          <option value="null">— Uncategorized —</option>
+        </select>
+        <select className={`${selectCls} sm:w-48`} value={brandFilter} onChange={e => setBrandFilter(e.target.value)}>
+          <option value="all">All brands</option>
+          {brands.map(b => <option key={b} value={b}>{b}</option>)}
+        </select>
+        <select className={`${selectCls} sm:w-48`} value={trackingFilter} onChange={e => setTrackingFilter(e.target.value)}>
+          <option value="all">All products</option>
+          <option value="tracked">🟢 Tracked only</option>
+          <option value="untracked">🔴 Not tracked</option>
+        </select>
+      </div>
+
+      {/* Result count strip when filters active */}
+      {(q || catFilter !== 'all' || brandFilter !== 'all' || trackingFilter !== 'all') && (
+        <div className="text-[11.5px] text-ink-500 mb-3">
+          Showing <span className="font-semibold text-ink-800">{filtered.length}</span> of {products.length} products
+          {(q || catFilter !== 'all' || brandFilter !== 'all' || trackingFilter !== 'all') && (
+            <button onClick={() => { setQ(''); setCatFilter('all'); setBrandFilter('all'); setTrackingFilter('all') }}
+              className="ml-3 text-brand-700 hover:underline font-medium">
+              Clear filters
+            </button>
+          )}
+        </div>
+      )}
+
       <Card>
         {loading ? (
           <LoadingBlock />
@@ -83,6 +151,12 @@ export default function Products() {
             title="No products yet"
             description="Add your first product so we can start tracking competitor prices against it."
             action={isManager && <Button onClick={openNew}><Plus size={15} /> Add first product</Button>}
+          />
+        ) : filtered.length === 0 ? (
+          <Empty
+            icon={Search}
+            title="No products match those filters"
+            description="Try clearing filters or broadening the search."
           />
         ) : (
           <div className="overflow-x-auto">
@@ -99,7 +173,7 @@ export default function Products() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-ink-100">
-                {products.map(p => (
+                {filtered.map(p => (
                   <tr key={p.id} className="hover:bg-canvas-100">
                     <Td className="font-mono text-xs">{p.sku}</Td>
                     <Td className="font-medium">{p.name}</Td>
