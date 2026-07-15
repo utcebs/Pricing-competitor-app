@@ -29,6 +29,18 @@ export default function PriceTrends() {
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState('')
 
+  // Default to a sensible product on first load: prefer one with linked
+  // competitors AND a current_price (so KPIs render), then any linked,
+  // then any product at all.
+  useEffect(() => {
+    if (productId || products.length === 0) return
+    const withLinks = new Set(cps.map(c => c.product_id))
+    const best = products.find(p => withLinks.has(p.id) && p.current_price != null)
+              || products.find(p => withLinks.has(p.id))
+              || products[0]
+    if (best) setProductId(String(best.id))
+  }, [products, cps, productId])
+
   const selectedProduct = useMemo(() => products.find(p => String(p.id) === productId), [products, productId])
   const myPrice = selectedProduct?.current_price != null ? Number(selectedProduct.current_price) : null
   const myMinPrice = selectedProduct?.min_price != null ? Number(selectedProduct.min_price) : null
