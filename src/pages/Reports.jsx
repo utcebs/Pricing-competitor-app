@@ -1,402 +1,446 @@
 import { useState, useEffect, useMemo } from 'react'
-import { FileBarChart, Save, Play, Download, Plus, Trash2 } from 'lucide-react'
 import {
   BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
+  ReferenceLine,
 } from 'recharts'
+import { FileBarChart, Download, TrendingUp, TrendingDown, Trophy, Package } from 'lucide-react'
 import Papa from 'papaparse'
 import * as XLSX from 'xlsx'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import { supabase } from '../supabaseClient'
-import { useTable, saveRow, deleteRow } from '../lib/db'
-import { useAuth } from '../lib/auth'
+import { useTable } from '../lib/db'
 import {
-  PageHeader, Card, Button, Modal, ConfirmDialog, Field,
-  Empty, LoadingBlock, ErrorBlock, inputCls, selectCls,
+  PageHeader, Card, Button, Empty, LoadingBlock, ErrorBlock, selectCls,
 } from '../components/UI'
 
-const METRICS = [
-  { value: 'avg_price',         label: 'Average competitor price',       requires: 'price' },
-  { value: 'min_price',         label: 'Minimum competitor price',       requires: 'price' },
-  { value: 'max_price',         label: 'Maximum competitor price',       requires: 'price' },
-  { value: 'gap_vs_yours',      label: 'Gap % vs your price',            requires: 'price' },
-  { value: 'in_stock_rate',     label: 'In-stock rate %',                requires: 'stock' },
-  { value: 'price_change_count', label: 'Number of price changes',       requires: 'price' },
-]
-const GROUP_BYS = [
-  { value: 'competitor', label: 'Competitor' },
-  { value: 'category',   label: 'Category' },
-  { value: 'product',    label: 'Product' },
-  { value: 'day',        label: 'Day' },
-  { value: 'week',       label: 'Week' },
-  { value: 'month',      label: 'Month' },
-]
-const CHART_TYPES = [
-  { value: 'table', label: 'Table' },
-  { value: 'bar',   label: 'Bar' },
-  { value: 'line',  label: 'Line' },
-  { value: 'pie',   label: 'Pie' },
-]
-const COLORS = ['#4f46e5', '#ea580c', '#0891b2', '#16a34a', '#db2777', '#7c3aed', '#0284c7', '#65a30d']
-
-const DEFAULT_CONFIG = {
-  metric: 'avg_price',
-  groupBy: 'competitor',
-  dateFrom: '',
-  dateTo: '',
-  chart: 'bar',
-  filterCategory: '',
-  filterCompetitor: '',
+// Warm sophisticated palette — matches the app's design tokens
+const PALETTE = ['#b1863a', '#0f766e', '#7c2d12', '#4c1d95', '#0369a1', '#65a30d', '#a21caf', '#c2410c']
+const AXIS_TICK = { fontSize: 11, fill: '#78716c', fontVariantNumeric: 'tabular-nums' }
+const TOOLTIP_STYLE = {
+  background: '#0c0a09', border: 'none', borderRadius: '10px',
+  color: '#fafaf9', fontSize: '12px', padding: '10px 14px',
 }
+const TOOLTIP_LABEL_STYLE = { color: '#d6d3d1', marginBottom: '4px', fontSize: '11px' }
 
 export default function Reports() {
-  const { user, isManager } = useAuth()
-  const { rows: reports, loading, refresh } = useTable('saved_reports', {
-    order: ['updated_at', { ascending: false }],
-  })
-  const [selected, setSelected] = useState(null)     // saved report
-  const [config, setConfig] = useState(DEFAULT_CONFIG)
-  const [showSave, setShowSave] = useState(false)
-  const [toDelete, setToDelete] = useState(null)
+  const { rows: products } = useTable('products', { order: ['name', { ascending: true }] })
+  const { rows: cps }      = useTable('competitor_products')
+  const { rows: competitors } = useTable('competitors', { eq: ['is_active', true], order: ['name', { ascending: true }] })
+  const { rows: categories } = useTable('categories', { order: ['name', { ascending: true }] })
 
-  const loadSaved = (r) => { setSelected(r); setConfig(r.config || DEFAULT_CONFIG) }
-  const newReport = () => { setSelected(null); setConfig(DEFAULT_CONFIG) }
+  const [rangeDays, setRangeDays] = useState(30)
+  const [priceHistory, setPriceHistory] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [err, setErr] = useState('')
+
+  const cpIds = cps.map(c => c.id)
+  useEffect(() => {
+    if (cpIds.length === 0) { setPriceHistory([]); setLoading(false); return }
+    const from = new Date(); from.setDate(from.getDate() - rangeDays)
+    setLoading(true); setErr('')
+    supabase.from('price_history')
+      .select('competitor_product_id, price, captured_at')
+      .in('competitor_product_id', cpIds)
+      .gte('captured_at', from.toISOString())
+      .order('captured_at', { ascending: true })
+      .limit(10_000)
+      .then(({ data, error }) => {
+        setLoading(false)
+        if (error) setErr(error.message)
+        else setPriceHistory(data || [])
+      })
+  }, [cpIds.join(','), rangeDays])
+
+  // Latest price per competitor_product
+  const latestByCp = useMemo(() => {
+    const map = {}
+    // history is asc; overwrite so last wins
+    for (const r of priceHistory) map[r.competitor_product_id] = r
+    return map
+  }, [priceHistory])
+
+  const compById = useMemo(() => Object.fromEntries(competitors.map(c => [c.id, c])), [competitors])
+  const catById  = useMemo(() => Object.fromEntries(categories.map(c => [c.id, c])), [categories])
+
+  // Per-product intel (mirrors dashboard logic)
+  const productIntel = useMemo(() => {
+    return products.map(p => {
+      const links = cps.filter(cp => cp.product_id === p.id)
+      const priced = links.map(cp => ({ cp, latest: latestByCp[cp.id] })).filter(x => x.latest?.price != null)
+      const rivalPrices = priced.map(x => Number(x.latest.price))
+      const minRival = rivalPrices.length ? Math.min(...rivalPrices) : null
+      const avgRival = rivalPrices.length ? rivalPrices.reduce((a, x) => a + x, 0) / rivalPrices.length : null
+      const yourPrice = p.current_price != null ? Number(p.current_price) : null
+      const gap = (yourPrice != null && minRival != null) ? ((yourPrice - minRival) / minRival) * 100 : null
+      const cheapestCp = priced.reduce((best, cur) =>
+        !best || Number(cur.latest.price) < Number(best.latest.price) ? cur : best, null)
+      return { product: p, priced, yourPrice, minRival, avgRival, gap, cheapestCp }
+    })
+  }, [products, cps, latestByCp])
+
+  // ─── Chart 1: Price positioning by category ─────────
+  // For each category: avg-of-yourPrice vs avg-of-avgRival across products
+  const chart1 = useMemo(() => {
+    const buckets = new Map()
+    for (const pi of productIntel) {
+      const catId = pi.product.category_id ?? 0
+      if (!buckets.has(catId)) buckets.set(catId, { name: catById[pi.product.category_id]?.name || 'Uncategorised', yourPrices: [], marketPrices: [] })
+      const b = buckets.get(catId)
+      if (pi.yourPrice != null) b.yourPrices.push(pi.yourPrice)
+      if (pi.avgRival != null)  b.marketPrices.push(pi.avgRival)
+    }
+    return [...buckets.values()]
+      .filter(b => b.yourPrices.length || b.marketPrices.length)
+      .map(b => ({
+        name: b.name,
+        You:    b.yourPrices.length ? Number((b.yourPrices.reduce((s, x) => s + x, 0) / b.yourPrices.length).toFixed(3)) : 0,
+        Market: b.marketPrices.length ? Number((b.marketPrices.reduce((s, x) => s + x, 0) / b.marketPrices.length).toFixed(3)) : 0,
+      }))
+  }, [productIntel, catById])
+
+  // ─── Chart 2: Market movement over time ──────────────
+  // Avg competitor price per day across all products (rolling)
+  const chart2 = useMemo(() => {
+    if (priceHistory.length === 0) return []
+    const byDay = new Map()   // day -> [prices]
+    for (const row of priceHistory) {
+      const day = row.captured_at.slice(0, 10)
+      const arr = byDay.get(day) || (byDay.set(day, []).get(day))
+      arr.push(Number(row.price))
+    }
+    return [...byDay.entries()].sort(([a], [b]) => a.localeCompare(b))
+      .map(([day, prices]) => ({
+        date: day,
+        avg: Number((prices.reduce((s, x) => s + x, 0) / prices.length).toFixed(3)),
+        min: Number(Math.min(...prices).toFixed(3)),
+        max: Number(Math.max(...prices).toFixed(3)),
+      }))
+  }, [priceHistory])
+
+  // ─── Chart 3: Where you win vs lose (per category, stacked) ──────
+  const chart3 = useMemo(() => {
+    const buckets = new Map()
+    for (const pi of productIntel) {
+      if (pi.gap == null) continue
+      const catId = pi.product.category_id ?? 0
+      if (!buckets.has(catId)) buckets.set(catId, { name: catById[pi.product.category_id]?.name || 'Uncategorised', Cheaper: 0, Flat: 0, Pricier: 0 })
+      const b = buckets.get(catId)
+      if (pi.gap < -1) b.Cheaper++
+      else if (pi.gap > 1) b.Pricier++
+      else b.Flat++
+    }
+    return [...buckets.values()]
+  }, [productIntel, catById])
+
+  // ─── Chart 4: Which competitor holds the lowest price most often ──────
+  const chart4 = useMemo(() => {
+    const counter = new Map()
+    for (const pi of productIntel) {
+      if (!pi.cheapestCp?.cp) continue
+      const cid = pi.cheapestCp.cp.competitor_id
+      counter.set(cid, (counter.get(cid) || 0) + 1)
+    }
+    return [...counter.entries()].map(([cid, count]) => ({
+      name: compById[cid]?.name || `#${cid}`,
+      value: count,
+    })).sort((a, b) => b.value - a.value)
+  }, [productIntel, compById])
+
+  // ─── Top products by impact (for the ranking panel) ───
+  const topByImpact = useMemo(() => {
+    return productIntel
+      .filter(pi => pi.gap != null && Math.abs(pi.gap) > 1)
+      .map(pi => ({
+        name: pi.product.name.length > 40 ? pi.product.name.slice(0, 40) + '…' : pi.product.name,
+        gap: Number(pi.gap.toFixed(1)),
+        impact: Math.abs(pi.gap * (pi.yourPrice || 0)),
+      }))
+      .sort((a, b) => b.impact - a.impact)
+      .slice(0, 8)
+      .map(x => ({ name: x.name, gap: x.gap }))
+      .reverse()  // horizontal bar reads top-to-bottom, we want biggest at top
+  }, [productIntel])
+
+  // ─── KPI totals ──────────────────────────────────────
+  const totalDataPoints = priceHistory.length
+  const trackedCount = productIntel.filter(pi => pi.priced.length > 0).length
+  const cheapestWinner = chart4[0]
+  const marketDelta = useMemo(() => {
+    if (chart2.length < 2) return null
+    return ((chart2[chart2.length - 1].avg - chart2[0].avg) / chart2[0].avg) * 100
+  }, [chart2])
+
+  // Exports
+  const exportAll = (kind) => {
+    const summary = productIntel
+      .filter(pi => pi.yourPrice != null || pi.priced.length > 0)
+      .map(pi => ({
+        product: pi.product.name,
+        sku: pi.product.sku,
+        category: catById[pi.product.category_id]?.name || 'Uncategorised',
+        your_price: pi.yourPrice,
+        market_min: pi.minRival,
+        market_avg: pi.avgRival,
+        gap_vs_min_pct: pi.gap != null ? Number(pi.gap.toFixed(2)) : null,
+        cheapest_competitor: pi.cheapestCp ? compById[pi.cheapestCp.cp.competitor_id]?.name : null,
+      }))
+    const ts = new Date().toISOString().slice(0, 10)
+    if (kind === 'csv') {
+      const csv = Papa.unparse(summary)
+      downloadBlob(csv, `analysis-${ts}.csv`, 'text/csv')
+    } else if (kind === 'xlsx') {
+      const ws = XLSX.utils.json_to_sheet(summary)
+      const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Analysis')
+      const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' })
+      downloadBlob(new Blob([buf], { type: 'application/octet-stream' }), `analysis-${ts}.xlsx`)
+    } else if (kind === 'pdf') {
+      const doc = new jsPDF()
+      doc.setFontSize(16); doc.text('Price Competitor · Portfolio Analysis', 14, 18)
+      doc.setFontSize(10); doc.setTextColor(120)
+      doc.text(`Last ${rangeDays} days · Generated ${new Date().toLocaleString()}`, 14, 25)
+      autoTable(doc, {
+        startY: 32,
+        head: [['Product', 'SKU', 'Category', 'You', 'Market min', 'Market avg', 'Gap %', 'Cheapest']],
+        body: summary.map(r => [r.product.slice(0, 30), r.sku, r.category, r.your_price ?? '—', r.market_min ?? '—', r.market_avg ?? '—', r.gap_vs_min_pct ?? '—', r.cheapest_competitor || '—']),
+        styles: { fontSize: 8, cellPadding: 2 },
+        headStyles: { fillColor: [12, 10, 9] },
+      })
+      doc.save(`analysis-${ts}.pdf`)
+    }
+  }
 
   return (
     <div>
       <PageHeader
+        kicker="Portfolio analysis"
         title="Reports"
-        subtitle="Build custom reports. Save them for later. Export to CSV or Excel."
-        action={<Button onClick={newReport}><Plus size={15} /> New report</Button>}
+        subtitle="Four cross-cutting views of your competitive position, updated every scrape. Adjust the range to compare weeks or seasons."
+        action={
+          <div className="flex items-center gap-2">
+            <select className={`${selectCls} w-40`} value={rangeDays} onChange={e => setRangeDays(Number(e.target.value))}>
+              <option value={7}>Last 7 days</option>
+              <option value={30}>Last 30 days</option>
+              <option value={60}>Last 60 days</option>
+              <option value={90}>Last 90 days</option>
+              <option value={365}>Last year</option>
+            </select>
+            <Button variant="secondary" size="sm" onClick={() => exportAll('csv')}><Download size={12} /> CSV</Button>
+            <Button variant="secondary" size="sm" onClick={() => exportAll('xlsx')}><Download size={12} /> Excel</Button>
+            <Button variant="secondary" size="sm" onClick={() => exportAll('pdf')}><Download size={12} /> PDF</Button>
+          </div>
+        }
       />
 
-      <div className="grid grid-cols-1 lg:grid-cols-[240px_1fr] gap-4">
-        <Card className="p-3 h-fit">
-          <div className="text-[10px] font-semibold uppercase tracking-widest text-ink-500 px-2 py-1">Saved reports</div>
-          {loading ? <LoadingBlock text="…" /> : reports.length === 0 ? (
-            <div className="text-xs text-ink-500 p-2">None yet.</div>
-          ) : (
-            <div className="space-y-0.5">
-              {reports.map(r => (
-                <div key={r.id} className={`group flex items-center justify-between px-2 py-1.5 rounded text-sm ${selected?.id === r.id ? 'bg-brand-50 text-brand-700 font-medium' : 'hover:bg-ink-100'}`}>
-                  <button onClick={() => loadSaved(r)} className="flex-1 text-left truncate">
-                    {r.name}
-                  </button>
-                  <button onClick={() => setToDelete(r)} className="opacity-0 group-hover:opacity-100 text-ink-400 hover:text-red-600">
-                    <Trash2 size={12} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
+      <ErrorBlock error={err} />
+
+      {loading ? <Card><LoadingBlock text="Compiling analysis" /></Card> : totalDataPoints === 0 ? (
+        <Card>
+          <Empty
+            icon={FileBarChart}
+            title="No price data in this range"
+            description="Trigger a scrape or extend the date range to populate the analysis."
+          />
         </Card>
+      ) : (
+        <>
+          {/* KPI strip */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+            <SumTile icon={Package} label="Data points"
+              value={totalDataPoints.toLocaleString()}
+              hint={`${trackedCount} products with prices`} tone="ink" />
+            <SumTile icon={marketDelta != null && marketDelta > 0 ? TrendingUp : TrendingDown}
+              label="Market direction"
+              value={marketDelta != null ? `${marketDelta > 0 ? '+' : ''}${marketDelta.toFixed(1)}%` : '—'}
+              hint={marketDelta != null
+                ? `Avg competitor price ${marketDelta > 0 ? 'up' : 'down'} vs ${rangeDays}d ago`
+                : 'Need more data'}
+              tone={marketDelta == null ? 'ink' : marketDelta > 0 ? 'red' : 'emerald'} />
+            <SumTile icon={Trophy} label="Cheapest most often"
+              value={cheapestWinner?.name || '—'}
+              hint={cheapestWinner ? `Wins on ${cheapestWinner.value} of ${chart4.reduce((a, x) => a + x.value, 0)} tracked` : ''}
+              tone="gold" />
+            <SumTile icon={FileBarChart} label="Categories tracked"
+              value={chart1.length}
+              hint={`out of ${categories.length + 1} available`}
+              tone="ink" />
+          </div>
 
-        <div>
-          <Card className="p-6 mb-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <Field label="Metric">
-                <select className={selectCls} value={config.metric} onChange={e => setConfig({ ...config, metric: e.target.value })}>
-                  {METRICS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
-                </select>
-              </Field>
-              <Field label="Group by">
-                <select className={selectCls} value={config.groupBy} onChange={e => setConfig({ ...config, groupBy: e.target.value })}>
-                  {GROUP_BYS.map(g => <option key={g.value} value={g.value}>{g.label}</option>)}
-                </select>
-              </Field>
-              <Field label="Date from">
-                <input type="date" className={inputCls} value={config.dateFrom || ''} onChange={e => setConfig({ ...config, dateFrom: e.target.value })} />
-              </Field>
-              <Field label="Date to">
-                <input type="date" className={inputCls} value={config.dateTo || ''} onChange={e => setConfig({ ...config, dateTo: e.target.value })} />
-              </Field>
-              <Field label="Chart type">
-                <select className={selectCls} value={config.chart} onChange={e => setConfig({ ...config, chart: e.target.value })}>
-                  {CHART_TYPES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
-                </select>
-              </Field>
-            </div>
-            <div className="flex justify-end gap-2 mt-4 pt-4 border-t border-ink-100">
-              {isManager && <Button variant="secondary" onClick={() => setShowSave(true)}><Save size={14} /> {selected ? 'Update' : 'Save'}</Button>}
-            </div>
-          </Card>
+          {/* 4 CHARTS in a 2×2 grid */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+            {/* Chart 1: Category price positioning */}
+            <ChartCard
+              kicker="Positioning"
+              title="You vs market — by category"
+              subtitle="Average of your prices next to the market's average, per category"
+            >
+              {chart1.length === 0 ? <EmptyChart/> : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={chart1} margin={{ top: 10, right: 10, bottom: 5, left: -10 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e7e5e4" vertical={false}/>
+                    <XAxis dataKey="name" tick={AXIS_TICK} axisLine={{ stroke: '#e7e5e4' }} tickLine={false}/>
+                    <YAxis tick={AXIS_TICK} axisLine={{ stroke: '#e7e5e4' }} tickLine={false} tickFormatter={v => v.toFixed(0)}/>
+                    <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} formatter={v => `KD ${Number(v).toFixed(3)}`}/>
+                    <Legend wrapperStyle={{ fontSize: 11, paddingTop: '8px' }} iconType="circle" iconSize={8}/>
+                    <Bar dataKey="You"    fill="#0c0a09"  radius={[6, 6, 0, 0]}/>
+                    <Bar dataKey="Market" fill="#b1863a"  radius={[6, 6, 0, 0]}/>
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
+            </ChartCard>
 
-          <ReportResult config={config} />
-        </div>
-      </div>
+            {/* Chart 2: Market movement over time */}
+            <ChartCard
+              kicker="Trend"
+              title={`Market price index — last ${rangeDays} days`}
+              subtitle="Average scraped competitor price across your catalogue"
+            >
+              {chart2.length === 0 ? <EmptyChart/> : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={chart2} margin={{ top: 10, right: 10, bottom: 5, left: -10 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e7e5e4" vertical={false}/>
+                    <XAxis dataKey="date" tick={AXIS_TICK} axisLine={{ stroke: '#e7e5e4' }} tickLine={false}
+                      tickFormatter={d => d.slice(5)}/>
+                    <YAxis tick={AXIS_TICK} axisLine={{ stroke: '#e7e5e4' }} tickLine={false} tickFormatter={v => v.toFixed(0)}/>
+                    <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} formatter={v => `KD ${Number(v).toFixed(3)}`}/>
+                    <Legend wrapperStyle={{ fontSize: 11, paddingTop: '8px' }} iconType="line" iconSize={12}/>
+                    <Line type="monotone" dataKey="min" name="Cheapest that day" stroke="#059669" strokeWidth={2} dot={false}/>
+                    <Line type="monotone" dataKey="avg" name="Average" stroke="#b1863a" strokeWidth={2.5} dot={false}/>
+                    <Line type="monotone" dataKey="max" name="Highest that day" stroke="#b91c1c" strokeWidth={2} dot={false}/>
+                  </LineChart>
+                </ResponsiveContainer>
+              )}
+            </ChartCard>
 
-      <SaveDialog
-        open={showSave}
-        onClose={() => setShowSave(false)}
-        existing={selected}
-        config={config}
-        userId={user?.id}
-        onSaved={() => { setShowSave(false); refresh() }}
-      />
-      <ConfirmDialog
-        open={!!toDelete}
-        onClose={() => setToDelete(null)}
-        title="Delete report?"
-        message={`Delete "${toDelete?.name}"?`}
-        onConfirm={async () => {
-          await deleteRow('saved_reports', toDelete.id)
-          if (selected?.id === toDelete.id) newReport()
-          setToDelete(null); refresh()
-        }}
-      />
+            {/* Chart 3: Portfolio health */}
+            <ChartCard
+              kicker="Portfolio"
+              title="Where you win vs lose — per category"
+              subtitle="Product count split by pricing position"
+            >
+              {chart3.length === 0 ? <EmptyChart/> : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={chart3} layout="vertical" margin={{ top: 10, right: 10, bottom: 5, left: 20 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e7e5e4" horizontal={false}/>
+                    <XAxis type="number" tick={AXIS_TICK} axisLine={{ stroke: '#e7e5e4' }} tickLine={false} allowDecimals={false}/>
+                    <YAxis type="category" dataKey="name" tick={AXIS_TICK} axisLine={{ stroke: '#e7e5e4' }} tickLine={false} width={100}/>
+                    <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE}/>
+                    <Legend wrapperStyle={{ fontSize: 11, paddingTop: '8px' }} iconType="circle" iconSize={8}/>
+                    <Bar dataKey="Cheaper" stackId="a" fill="#059669" radius={[0, 0, 0, 0]}/>
+                    <Bar dataKey="Flat"    stackId="a" fill="#d6d3d1"/>
+                    <Bar dataKey="Pricier" stackId="a" fill="#b91c1c" radius={[0, 6, 6, 0]}/>
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
+            </ChartCard>
+
+            {/* Chart 4: Cheapest-competitor share */}
+            <ChartCard
+              kicker="Competition"
+              title="Who's cheapest — most often"
+              subtitle="Share of products where each competitor holds the lowest price"
+            >
+              {chart4.length === 0 ? <EmptyChart/> : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie data={chart4} dataKey="value" nameKey="name" cx="50%" cy="48%"
+                         innerRadius={60} outerRadius={110} paddingAngle={2}
+                         label={({ name, percent }) => `${name} ${Math.round(percent * 100)}%`}
+                         labelLine={false}
+                         style={{ fontSize: 11, fontWeight: 600 }}>
+                      {chart4.map((_, i) => <Cell key={i} fill={PALETTE[i % PALETTE.length]} stroke="#fff" strokeWidth={2}/>)}
+                    </Pie>
+                    <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE}
+                      formatter={(v, n) => [`${v} product${v === 1 ? '' : 's'}`, n]}/>
+                  </PieChart>
+                </ResponsiveContainer>
+              )}
+            </ChartCard>
+          </div>
+
+          {/* Bottom: top-impact products horizontal bar */}
+          {topByImpact.length > 0 && (
+            <Card className="p-6">
+              <div className="flex items-baseline justify-between mb-4 flex-wrap gap-2">
+                <div>
+                  <div className="text-[10px] uppercase tracking-[0.14em] font-semibold text-red-700">Attention</div>
+                  <h3 className="font-display text-[20px] tracking-tight text-ink-900 mt-1">
+                    Biggest gaps — where a repricing decision matters most
+                  </h3>
+                </div>
+              </div>
+              <div className="h-[380px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={topByImpact} layout="vertical" margin={{ top: 5, right: 40, bottom: 5, left: 20 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e7e5e4" horizontal={false}/>
+                    <XAxis type="number" tick={AXIS_TICK} axisLine={{ stroke: '#e7e5e4' }} tickLine={false}
+                      tickFormatter={v => `${v > 0 ? '+' : ''}${v}%`}/>
+                    <YAxis type="category" dataKey="name" tick={AXIS_TICK} axisLine={{ stroke: '#e7e5e4' }} tickLine={false} width={280}/>
+                    <ReferenceLine x={0} stroke="#78716c" strokeDasharray="3 3"/>
+                    <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE}
+                      formatter={v => [`${v > 0 ? '+' : ''}${v}%`, 'Gap vs cheapest rival']}/>
+                    <Bar dataKey="gap" radius={[0, 4, 4, 0]}>
+                      {topByImpact.map((r, i) => (
+                        <Cell key={i} fill={r.gap > 0 ? '#b91c1c' : '#059669'}/>
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </Card>
+          )}
+        </>
+      )}
     </div>
   )
 }
 
-/** Runs the report by fetching raw price_history + stock_history and aggregating client-side. */
-function ReportResult({ config }) {
-  const [rows, setRows] = useState([])
-  const [loading, setLoading] = useState(false)
-  const [err, setErr] = useState('')
-
-  useEffect(() => {
-    (async () => {
-      setLoading(true); setErr('')
-      try {
-        // Bring in dimension data + a single big fetch for facts.
-        const [{ data: cps }, { data: products }, { data: competitors }, { data: categories }] = await Promise.all([
-          supabase.from('competitor_products').select('id, product_id, category_id, competitor_id, name'),
-          supabase.from('products').select('id, name, sku, current_price, category_id'),
-          supabase.from('competitors').select('id, name'),
-          supabase.from('categories').select('id, name'),
-        ])
-
-        const cpById = Object.fromEntries((cps || []).map(x => [x.id, x]))
-        const prodById = Object.fromEntries((products || []).map(x => [x.id, x]))
-        const compById = Object.fromEntries((competitors || []).map(x => [x.id, x]))
-        const catById  = Object.fromEntries((categories || []).map(x => [x.id, x]))
-
-        const requires = METRICS.find(m => m.value === config.metric)?.requires
-        const table = requires === 'stock' ? 'stock_history' : 'price_history'
-
-        let q = supabase.from(table).select('*')
-        if (config.dateFrom) q = q.gte('captured_at', config.dateFrom + 'T00:00:00Z')
-        if (config.dateTo)   q = q.lte('captured_at', config.dateTo   + 'T23:59:59Z')
-        // Limit large datasets — 10k rows is plenty for a client-side aggregate
-        q = q.limit(10000)
-        const { data: facts, error } = await q
-        if (error) throw error
-
-        // Build rows per fact with expanded dimensions
-        const enriched = (facts || []).map(f => {
-          const cp = cpById[f.competitor_product_id]
-          const p  = cp ? prodById[cp.product_id] : null
-          return {
-            ...f,
-            competitor_id: cp?.competitor_id,
-            competitor_name: compById[cp?.competitor_id]?.name || 'Unknown',
-            product_id: cp?.product_id,
-            product_name: p?.name || cp?.name || 'Unmatched',
-            category_id: cp?.category_id || p?.category_id,
-            category_name: catById[cp?.category_id || p?.category_id]?.name || 'Uncategorised',
-            your_price: p?.current_price,
-            day: (f.captured_at || '').slice(0, 10),
-            week: yearWeek(f.captured_at),
-            month: (f.captured_at || '').slice(0, 7),
-          }
-        })
-
-        // Group + aggregate
-        const groupKey = config.groupBy
-        const buckets = new Map()
-        enriched.forEach(row => {
-          const key =
-            groupKey === 'competitor' ? row.competitor_name :
-            groupKey === 'category'   ? row.category_name :
-            groupKey === 'product'    ? row.product_name :
-            row[groupKey] // day/week/month
-          if (!key) return
-          const b = buckets.get(key) || { key, prices: [], stocks: [], your_prices: [] }
-          if (table === 'price_history' && row.price != null) b.prices.push(Number(row.price))
-          if (table === 'stock_history') b.stocks.push(row.in_stock ? 1 : 0)
-          if (row.your_price != null) b.your_prices.push(Number(row.your_price))
-          buckets.set(key, b)
-        })
-
-        const finalRows = [...buckets.values()].map(b => {
-          const avg = arr => arr.length ? arr.reduce((s, x) => s + x, 0) / arr.length : null
-          const min = arr => arr.length ? Math.min(...arr) : null
-          const max = arr => arr.length ? Math.max(...arr) : null
-          const gap = () => {
-            if (!b.prices.length || !b.your_prices.length) return null
-            const yourAvg = avg(b.your_prices)
-            return yourAvg ? ((avg(b.prices) - yourAvg) / yourAvg) * 100 : null
-          }
-          const value =
-            config.metric === 'avg_price'          ? avg(b.prices) :
-            config.metric === 'min_price'          ? min(b.prices) :
-            config.metric === 'max_price'          ? max(b.prices) :
-            config.metric === 'gap_vs_yours'       ? gap() :
-            config.metric === 'in_stock_rate'      ? (b.stocks.length ? (avg(b.stocks) * 100) : null) :
-            config.metric === 'price_change_count' ? b.prices.length :
-            null
-          return { key: b.key, value: value == null ? null : Number(value.toFixed(3)), count: b.prices.length || b.stocks.length }
-        }).sort((a, b) => (a.key || '').localeCompare(b.key || ''))
-
-        setRows(finalRows)
-      } catch (e) {
-        setErr(e.message || 'Report failed')
-      } finally { setLoading(false) }
-    })()
-  }, [config.metric, config.groupBy, config.dateFrom, config.dateTo])
-
-  const exportCsv = () => {
-    const csv = Papa.unparse(rows.map(r => ({ [config.groupBy]: r.key, value: r.value, count: r.count })))
-    downloadBlob(csv, `report-${config.metric}-${Date.now()}.csv`, 'text/csv')
-  }
-  const exportXlsx = () => {
-    const ws = XLSX.utils.json_to_sheet(rows.map(r => ({ [config.groupBy]: r.key, value: r.value, count: r.count })))
-    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Report')
-    const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' })
-    downloadBlob(new Blob([buf], { type: 'application/octet-stream' }), `report-${config.metric}-${Date.now()}.xlsx`)
-  }
-  const exportPdf = () => {
-    const doc = new jsPDF()
-    const metricLabel = METRICS.find(m => m.value === config.metric)?.label || config.metric
-    doc.setFontSize(16); doc.text('Price Competitor · Report', 14, 18)
-    doc.setFontSize(11); doc.setTextColor(100)
-    doc.text(`${metricLabel} grouped by ${config.groupBy}`, 14, 26)
-    if (config.dateFrom || config.dateTo) {
-      doc.text(`${config.dateFrom || '—'} → ${config.dateTo || '—'}`, 14, 32)
-    }
-    autoTable(doc, {
-      startY: 38,
-      head: [[config.groupBy, 'value', 'data points']],
-      body: rows.map(r => [r.key, r.value ?? '—', r.count]),
-      styles: { fontSize: 10 },
-      headStyles: { fillColor: [79, 70, 229] },
-    })
-    doc.save(`report-${config.metric}-${Date.now()}.pdf`)
-  }
-
+function ChartCard({ kicker, title, subtitle, children }) {
   return (
-    <Card className="p-6">
-      <ErrorBlock error={err} />
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-sm font-semibold text-ink-800">Result</h3>
-        {rows.length > 0 && (
-          <div className="flex gap-2">
-            <Button size="sm" variant="secondary" onClick={exportCsv}><Download size={12} /> CSV</Button>
-            <Button size="sm" variant="secondary" onClick={exportXlsx}><Download size={12} /> Excel</Button>
-            <Button size="sm" variant="secondary" onClick={exportPdf}><Download size={12} /> PDF</Button>
-          </div>
-        )}
+    <Card className="p-5">
+      <div className="mb-4">
+        <div className="text-[10px] uppercase tracking-[0.14em] font-semibold text-brand-700">{kicker}</div>
+        <h3 className="font-display text-[18px] tracking-tight text-ink-900 mt-1 leading-tight">{title}</h3>
+        {subtitle && <p className="text-[11.5px] text-ink-500 mt-1 leading-snug">{subtitle}</p>}
       </div>
-      {loading ? <LoadingBlock /> : rows.length === 0 ? (
-        <Empty icon={FileBarChart} title="No data yet in this range" description="Adjust filters or log some prices first." />
-      ) : config.chart === 'table' ? (
-        <TableView rows={rows} groupBy={config.groupBy} metric={config.metric} />
-      ) : config.chart === 'bar' ? (
-        <ChartView rows={rows} type="bar" />
-      ) : config.chart === 'line' ? (
-        <ChartView rows={rows} type="line" />
-      ) : (
-        <ChartView rows={rows} type="pie" />
-      )}
+      <div className="h-[300px]">{children}</div>
     </Card>
   )
 }
 
-function TableView({ rows, groupBy, metric }) {
-  return (
-    <div className="overflow-x-auto">
-      <table className="w-full">
-        <thead className="bg-canvas-100 border-b border-ink-200">
-          <tr>
-            <th className="px-4 py-2 text-left text-[10px] font-semibold text-ink-500 uppercase tracking-wider">{groupBy}</th>
-            <th className="px-4 py-2 text-right text-[10px] font-semibold text-ink-500 uppercase tracking-wider">{metric}</th>
-            <th className="px-4 py-2 text-right text-[10px] font-semibold text-ink-500 uppercase tracking-wider">Data points</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-ink-100">
-          {rows.map((r, i) => (
-            <tr key={i}>
-              <td className="px-4 py-2 text-sm font-medium">{r.key}</td>
-              <td className="px-4 py-2 text-sm text-right tabular-nums">{r.value?.toLocaleString() ?? '—'}</td>
-              <td className="px-4 py-2 text-xs text-ink-500 text-right tabular-nums">{r.count}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  )
-}
-
-function ChartView({ rows, type }) {
-  return (
-    <div className="h-[380px]">
-      <ResponsiveContainer width="100%" height="100%">
-        {type === 'bar' ? (
-          <BarChart data={rows}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-            <XAxis dataKey="key" tick={{ fontSize: 11 }} />
-            <YAxis tick={{ fontSize: 11 }} />
-            <Tooltip />
-            <Bar dataKey="value" fill="#4f46e5" />
-          </BarChart>
-        ) : type === 'line' ? (
-          <LineChart data={rows}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-            <XAxis dataKey="key" tick={{ fontSize: 11 }} />
-            <YAxis tick={{ fontSize: 11 }} />
-            <Tooltip />
-            <Line type="monotone" dataKey="value" stroke="#4f46e5" strokeWidth={2} />
-          </LineChart>
-        ) : (
-          <PieChart>
-            <Pie data={rows} dataKey="value" nameKey="key" cx="50%" cy="50%" outerRadius={130} label>
-              {rows.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
-            </Pie>
-            <Tooltip />
-            <Legend />
-          </PieChart>
-        )}
-      </ResponsiveContainer>
-    </div>
-  )
-}
-
-function SaveDialog({ open, onClose, existing, config, userId, onSaved }) {
-  const [name, setName] = useState('')
-  const [busy, setBusy] = useState(false)
-  useEffect(() => { if (open) setName(existing?.name || '') }, [open, existing?.id])
-
-  const submit = async () => {
-    setBusy(true)
-    const payload = existing?.id
-      ? { id: existing.id, name, config }
-      : { name, config, owner_id: userId }
-    await saveRow('saved_reports', payload)
-    setBusy(false); onSaved()
+function SumTile({ icon: Icon, label, value, hint, tone = 'ink' }) {
+  const tones = {
+    emerald: { icon: 'bg-emerald-50 text-emerald-700 border-emerald-100', accent: 'text-emerald-800' },
+    red:     { icon: 'bg-red-50 text-red-700 border-red-100',             accent: 'text-red-800' },
+    gold:    { icon: 'bg-brand-50 text-brand-700 border-brand-100',       accent: 'text-brand-800' },
+    ink:     { icon: 'bg-ink-100 text-ink-700 border-ink-200',            accent: 'text-ink-900' },
   }
+  const t = tones[tone] || tones.ink
   return (
-    <Modal open={open} onClose={onClose} title={existing ? 'Update report' : 'Save report'}>
-      <Field label="Report name" required>
-        <input className={inputCls} value={name} onChange={e => setName(e.target.value)} />
-      </Field>
-      <div className="flex justify-end gap-2 mt-4 pt-4 border-t border-ink-100">
-        <Button variant="secondary" onClick={onClose}>Cancel</Button>
-        <Button busy={busy} disabled={!name} onClick={submit}>Save</Button>
+    <Card className="p-5">
+      <div className="flex items-start gap-3">
+        <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 border ${t.icon}`}>
+          <Icon size={16} strokeWidth={2}/>
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="text-[10px] uppercase tracking-[0.14em] font-semibold text-ink-500">{label}</div>
+          <div className={`font-display text-[22px] leading-tight mt-1.5 tabular-nums truncate ${t.accent}`}>{value}</div>
+          {hint && <div className="text-[11px] text-ink-500 mt-1">{hint}</div>}
+        </div>
       </div>
-    </Modal>
+    </Card>
   )
 }
 
-// helpers
-function yearWeek(iso) {
-  if (!iso) return null
-  const d = new Date(iso)
-  const start = new Date(d.getFullYear(), 0, 1)
-  const days = Math.floor((d - start) / (1000 * 60 * 60 * 24))
-  const w = Math.ceil((days + start.getDay() + 1) / 7)
-  return `${d.getFullYear()}-W${String(w).padStart(2, '0')}`
+function EmptyChart() {
+  return (
+    <div className="h-full flex items-center justify-center text-[12px] text-ink-400">
+      Not enough data yet
+    </div>
+  )
 }
+
 function downloadBlob(data, filename, type) {
   const blob = data instanceof Blob ? data : new Blob([data], { type })
   const url = URL.createObjectURL(blob)

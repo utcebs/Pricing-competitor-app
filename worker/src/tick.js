@@ -8,7 +8,7 @@
  */
 import 'dotenv/config'
 import { supabase } from './supabase.js'
-import { runScrapeJob } from './scraper.js'
+import { runScrapeJob, refreshOwnPrices } from './scraper.js'
 import { runFindUrlsJob } from './find-urls.js'
 import { checkAlertRules } from './alerts.js'
 import { evaluateRepricingRules } from './repricing.js'
@@ -43,6 +43,9 @@ async function tick() {
   for (const run of (queued || [])) {
     await runScrapeJob(run)
   }
+
+  // 1b) Refresh your-own-website prices for any products with own_url set
+  await refreshOwnPrices()
 
   // 2) Alert evaluation
   await checkAlertRules()

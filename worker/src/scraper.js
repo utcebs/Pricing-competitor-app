@@ -145,11 +145,20 @@ export async function runScrapeJob(run) {
           scrape_run_id: run.id,
         })
       }
-      // Update image_url only if we found one and cp doesn't already have
-      // a manual override (respect existing image if scraper returns null)
+      // Update image_url only if we found one (respect existing image if scraper returns null)
       const cpUpdate = { last_seen_at: new Date().toISOString() }
       if (imageUrl) cpUpdate.image_url = imageUrl
       await supabase.from('competitor_products').update(cpUpdate).eq('id', cp.id)
+
+      // Also promote to products.image_url if the product doesn't have one yet —
+      // first competitor scrape that finds an image wins. This way the product
+      // has a stable image even if that competitor link is later removed.
+      if (imageUrl && cp.product_id) {
+        await supabase.from('products')
+          .update({ image_url: imageUrl })
+          .eq('id', cp.product_id)
+          .is('image_url', null)
+      }
 
       await supabase.from('scrape_jobs').insert({
         scrape_run_id: run.id,
@@ -398,5 +407,66 @@ function absoluteUrl(maybeRelative, base) {
   } catch {
     return maybeRelative
   }
+}
+
+/**
+ * refreshOwnPrices — sweep all products with own_url set, scrape each,
+ * update products.current_price. Called from tick.js after competitor scrapes.
+ */
+export async function refreshOwnPrices() {
+  const { data: products } = await supabase
+    .from('products')
+    .select('id, name, own_url, current_price')
+    .not('own_url', 'is', null)
+    .eq('is_active', true)
+
+  if (!products?.length) return
+
+  console.log(`[own-prices] refreshing ${products.length} product(s) with own_url`)
+
+  const browser = await chromium.launch({
+    headless: true,
+    proxy: process.env.HTTP_PROXY ? { server: process.env.HTTP_PROXY } : undefined,
+  })
+
+  let updated = 0, failed = 0
+  for (const p of products) {
+    let ctx = null
+    try {
+      ctx = await browser.newContext({
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        viewport: { width: 1440, height: 900 },
+        locale: 'en-US',
+      })
+      const page = await ctx.newPage()
+      await page.route('**/*', route => {
+        const t = route.request().resourceType()
+        if (t === 'image' || t === 'media' || t === 'font') return route.abort()
+        return route.continue()
+      })
+      await page.goto(p.own_url, { waitUntil: 'domcontentloaded', timeout: 30_000 })
+      await page.waitForLoadState('networkidle', { timeout: 12_000 }).catch(() => {})
+      await page.waitForTimeout(1000)
+
+      const { price } = await extractPrice(page, '')
+      const image = await extractImage(page, p.own_url)
+      await ctx.close(); ctx = null
+
+      const patch = {}
+      if (price != null && Number(price) !== Number(p.current_price)) patch.current_price = price
+      if (image) patch.image_url = image
+      if (Object.keys(patch).length > 0) {
+        await supabase.from('products').update(patch).eq('id', p.id)
+        console.log(`[own-prices] ✓ ${p.name}: ${JSON.stringify(patch)}`)
+        updated++
+      }
+    } catch (e) {
+      failed++
+      if (ctx) await ctx.close().catch(() => {})
+      console.log(`[own-prices] ✗ ${p.name}: ${e.message}`)
+    }
+  }
+  await browser.close()
+  console.log(`[own-prices] done — updated ${updated}, failed ${failed}`)
 }
 // scrape verification pass @ 2026-07-12T13:14:34Z

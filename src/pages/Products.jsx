@@ -321,6 +321,7 @@ function ProductForm({ open, product, categories, currencies, onClose, onSaved }
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [autoFind, setAutoFind] = useState(true)
+  const [priceSource, setPriceSource] = useState('manual')   // 'manual' | 'url'
 
   const isNew = !product?.id
 
@@ -331,9 +332,12 @@ function ProductForm({ open, product, categories, currencies, onClose, onSaved }
       sku: '', name: '', brand: '', category_id: '', description: '',
       cost_price: '', min_price: '', target_margin: '', current_price: '',
       currency_code: 'KWD', is_own_brand: false, is_active: true,
+      own_url: '',
       ...product,
     })
-    setAutoFind(true)   // default ON for new products; ignored for edits
+    setAutoFind(true)
+    // If the product came in with an own_url, start on URL tab
+    setPriceSource(product?.own_url ? 'url' : 'manual')
     setErr('')
   }, [open, product?.id])
 
@@ -349,8 +353,22 @@ function ProductForm({ open, product, categories, currencies, onClose, onSaved }
         else payload[k] = Number(payload[k])
       })
       if (!payload.category_id) payload.category_id = null
+      // If URL mode: clear manual current_price so scraper populates it;
+      // if manual mode: clear own_url so worker doesn't overwrite.
+      if (priceSource === 'url') {
+        if (!payload.own_url?.trim()) throw new Error('Product URL is required when price source is set to URL')
+        payload.own_url = payload.own_url.trim()
+        // Keep any prior current_price as a fallback — the worker will refresh it soon
+      } else {
+        payload.own_url = null
+      }
       const { data, error } = await saveRow('products', payload)
-      if (error) throw error
+      if (error) {
+        if (error.message?.includes('own_url')) {
+          throw new Error('URL support not ready — ask admin to run the migration adding products.own_url column.')
+        }
+        throw error
+      }
 
       // If it's a NEW product AND the user checked "auto-find URLs",
       // queue a url_find_jobs row so the worker searches every active
@@ -403,12 +421,51 @@ function ProductForm({ open, product, categories, currencies, onClose, onSaved }
         <Field label="Min price" hint="Absolute repricing floor">
           <input type="number" step="0.001" className={inputCls} value={form.min_price ?? ''} onChange={e => set('min_price', e.target.value)} />
         </Field>
-        <Field label="Current price" hint="Your live selling price">
-          <input type="number" step="0.001" className={inputCls} value={form.current_price ?? ''} onChange={e => set('current_price', e.target.value)} />
-        </Field>
         <Field label="Target margin %">
           <input type="number" step="0.01" className={inputCls} value={form.target_margin ?? ''} onChange={e => set('target_margin', e.target.value)} />
         </Field>
+
+        {/* Price source: manual OR from your own URL */}
+        <div className="md:col-span-2">
+          <div className="text-[11px] font-semibold text-ink-600 uppercase tracking-[0.08em] mb-2">Current Price</div>
+          <div className="inline-flex bg-ink-100 rounded-lg p-1 gap-1 mb-3">
+            <button type="button" onClick={() => setPriceSource('manual')}
+              className={`px-4 py-1.5 rounded-md text-[12px] font-semibold transition-all ${
+                priceSource === 'manual' ? 'bg-white text-ink-900 shadow-sm' : 'text-ink-500 hover:text-ink-800'
+              }`}>
+              Enter manually
+            </button>
+            <button type="button" onClick={() => setPriceSource('url')}
+              className={`px-4 py-1.5 rounded-md text-[12px] font-semibold transition-all inline-flex items-center gap-1.5 ${
+                priceSource === 'url' ? 'bg-white text-ink-900 shadow-sm' : 'text-ink-500 hover:text-ink-800'
+              }`}>
+              <Sparkles size={11}/> Fetch from my website
+            </button>
+          </div>
+          {priceSource === 'manual' ? (
+            <input type="number" step="0.001" className={inputCls}
+              value={form.current_price ?? ''}
+              onChange={e => set('current_price', e.target.value)}
+              placeholder="e.g. 409.900" />
+          ) : (
+            <>
+              <input type="url" className={inputCls}
+                value={form.own_url ?? ''}
+                onChange={e => set('own_url', e.target.value)}
+                placeholder="https://your-website.com/your-product-page" />
+              <div className="text-[11px] text-ink-500 mt-1.5 leading-relaxed">
+                The worker will visit this URL on every scrape tick (every 5 min), extract the price,
+                and update this product's current price automatically. Useful when your prices change
+                frequently on Shopify / Magento / your ERP-driven storefront.
+              </div>
+              {form.current_price != null && form.current_price !== '' && (
+                <div className="text-[11px] text-ink-600 mt-2 px-2.5 py-1 bg-canvas-100 rounded inline-block">
+                  Last known price: <span className="font-mono font-semibold tabular-nums">KD {Number(form.current_price).toFixed(3)}</span>
+                </div>
+              )}
+            </>
+          )}
+        </div>
         <div className="flex items-center gap-4 pt-6">
           <label className="inline-flex items-center gap-2 text-sm text-ink-700">
             <input type="checkbox" checked={!!form.is_own_brand} onChange={e => set('is_own_brand', e.target.checked)} />
