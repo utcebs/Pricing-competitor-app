@@ -338,4 +338,186 @@ Full setup walkthrough + anti-bot proxy config + custom-selector docs live in `w
 | Repricing | ✅ | ✅ Rule engine | Runs on the worker |
 | Integrations config | ✅ | ✅ Push handlers for all 6 | Real credentials from tenants (D365 app registration, Shopify token, etc.) |
 
-_Last updated: 2026-07-11 — Phases 2-5 shipped._
+---
+
+## 20. 2026-07-12 to 2026-07-16 — premium rebuild + real scraping + auto-linking
+
+Long iterative session. What changed, grouped by area:
+
+### A. Bug that hid every "Add" button since day one
+`AuthProvider.fetchProfile()` used `supabasePublic` (anon key, no session). RLS on `profiles` requires `auth.role() = 'authenticated'`. So the profile fetch **silently returned zero rows** for everyone — `isAdmin`/`isManager` always false. Every admin-gated button (Add product, Add competitor, Users page, etc.) was invisible to everyone including admins.
+
+**Fix**: `src/lib/auth.jsx` — switched `fetchProfile` to the auth-enabled `supabase` client. Safe to await inside because callers fire-and-forget: the outer `onAuthStateChange` callback returns before the inner await resolves, so no GoTrue lock is held.
+
+### B. Design overhaul — premium warm palette
+`tailwind.config.js` + `src/index.css` + `src/components/UI.jsx` rewritten.
+
+- **Palette**: refined muted gold (`#b1863a` brand-500) + warm near-black ink scale (stone family) + cream canvas backgrounds. No cool slate anywhere.
+- **Fonts**: `Inter` body + **`Fraunces` serif** for wordmark and page hero titles (`font-display` class). Loaded via Google Fonts inline.
+- **Sidebar**: rebuilt as `"Prisma · Intel"` wordmark in serif, warm near-black bg, gold-dot active-nav marker. Section labels ("Automation", "Administration") with `.2em` tracking.
+- **Login**: split panel — dark brand side left, form right with serif welcome header.
+- **UI tokens**: refined buttons (primary charcoal, new `gold` variant), modal with backdrop blur + subtitle, Field with small-caps micro-labels, layered warm shadows (`shadow-card` / `shadow-card-lg` / `shadow-card-xl`).
+- **Palette sweep**: `sed` swept every page: `slate-*` → `ink-*` / `canvas-*`.
+
+### C. Admin user CRUD
+New migration: `supabase/migrations/admin-user-mgmt.sql`
+- `admin_create_user(email, password, full_name, role)` — SECURITY DEFINER; bcrypts password, inserts to `auth.users` + upserts profile
+- `admin_delete_user(id)` — cascades to profile via FK; can't delete self
+- `admin_reset_password(id, new_password)` — bcrypt-hash the new pass
+All guarded so only `role='admin'` can invoke.
+
+Users page (`src/pages/Users.jsx`) rebuilt: **New user** gold CTA, 3 role summary tiles, avatar chips with initials colour-coded by role, inline role dropdown, KeyRound + Trash actions. Guardrails: no self-delete, warn on self-demote.
+
+### D. Bulk import (CSV upload with downloadable template)
+New reusable component: `src/components/BulkUpload.jsx`
+- Downloads template CSV pre-filled with 2-3 sample rows
+- Parses uploaded CSV via papaparse (already in stack)
+- Per-row `transformRow(row)` returns `{ payload, error }` — errors surface in a per-row "Skipped rows" panel
+- Preview first 5 rows before Import
+
+Wired into Products, Competitors, and Linked Items pages.
+
+### E. New pages / major page redesigns
+
+**`/#/comparison`** (new page — `src/pages/Comparison.jsx`)
+- Matrix view: rows = your products, columns = your price · cheapest rival · gap · one column per active competitor
+- Colour-coded pill: 🟢 you're cheaper · 🔴 you're pricier · grey Flat within 1%
+- Sort dropdown: 🎯 opportunity (biggest overpricing first) · ⚠️ threat · 📊 coverage · A–Z
+- **Refresh** button (re-read DB, instant) + **Re-scrape all** button (queues fresh scrapes across all competitors, ~5 min)
+- Category + text search filters
+- Product thumbnails on the left, image links to Trend chart
+- Wired into Layout nav as "Comparison"
+
+**`/#/scrapers`** rebuild
+- Removed stale "Requires worker to be deployed" warning (worker IS deployed via GH Actions)
+- Worker health strip: `Healthy` / `Idle` / `Stale` computed from last non-queued run's age (< 10 min = healthy). Pulsing green dot on the healthy state.
+- "Last tick activity" + "Next expected tick" tiles
+- Live activity panel with per-run progress bars + counters that auto-refresh every 3-5s while runs are active
+- **Recent runs table rows are clickable** → drawer opens showing per-URL scrape jobs, extracted prices, durations, stock badges, and **HTML sample viewer** (raw HTML the scraper saw, useful for debugging failed selectors)
+- Trigger buttons disabled + show "0 URLs" when the competitor has no linked competitor_products
+
+**`/#/dashboard`** — total rewrite for category managers (`src/pages/Dashboard.jsx`)
+- Editorial hero header: `Good morning, {name}. You have N products priced above the market by 5%+.`
+- KPI tiles: Coverage · Undercut by market · Commanding premium · Fresh data (pulsing dot when worker healthy)
+- **Priority actions panel** — top 6 products ranked by revenue impact (gap × price), each row shows your price, cheapest rival, gap pill, and a **Suggested new price** (cheapest − 0.001, respecting min_price floor)
+- **Margin opportunities panel** — products where you're >5% cheaper than avg rival ("you could raise prices here")
+- **Recent competitor moves** — last 72h price changes as compact cards with arrows
+- **Data pipeline** mini-card — worker status + last tick age
+- **Category performance table** — avg-gap pill per category, overpriced/underpriced counts
+- Quick action chips at the bottom
+- Dropped the "customize widget" flow — over-engineered
+
+**`/#/prices`** (Price Trends) — full analytical view
+- Dark hero card with product name in serif + huge tabular Your Price
+- 4 analytical tiles: Market range · Market average (with your delta) · Your position (rank + words: cheapest/middle/most expensive) · Market volatility (Very low → Very high label)
+- Trend chart with warm palette (gold/teal/wine) instead of default indigo/orange. Your price rendered as an in-chart dashed reference line with a "KD 409.900" label. Dark tooltip.
+- Competitor snapshot table + notable moves panel (≥2% changes)
+- **Auto-defaults to a product on load**: prefers a product with linked competitors + current_price set, then any linked, then any product
+
+**`/#/reports`** — total rewrite (removed the report builder)
+- 4-chart executive analytics dashboard
+- KPI strip (4 tiles): Data points · Market direction · Cheapest most often · Categories tracked
+- 2×2 chart grid:
+  1. **You vs market by category** — grouped bars, charcoal for you, gold for market
+  2. **Market price index over N days** — min/avg/max lines (emerald/gold/wine)
+  3. **Where you win vs lose per category** — stacked horizontal bar, cheaper/flat/pricier counts
+  4. **Who's cheapest most often** — donut, share of "lowest price wins" per competitor
+- Full-width bottom chart: **Biggest gap products** — horizontal bar chart with red/green fill
+- Range selector (7/30/60/90/365 days) drives everything
+- CSV / Excel / PDF exports of the summary table
+
+**`/#/products`** — Filters + Auto-find + Price source toggle
+- Filter bar: text search (name/SKU/brand), category dropdown, brand dropdown (auto-derived), tracking dropdown (All / 🟢 Tracked / 🔴 Not tracked)
+- "Showing N of M · Clear filters" strip
+- **Tracking column** with `🟢 N linked` or `🔴 not tracked` badge on every row
+- **✨ Find URLs** action per row (Sparkles icon) — queues a `url_find_jobs` row
+- **Auto-find URLs on save** checkbox in Add Product modal (default ON for new products) — automatically queues the finder when the product saves
+- **Price source toggle** in Add Product: `Enter manually` vs `Fetch from my website` (URL). URL mode writes to `products.own_url` which the worker refreshes on every tick
+- Product thumbnails (40×40) on every row
+
+**`/#/competitor-products`** (Linked Items) — hierarchical tree view
+- Category (collapsible with chevron) → Product (collapsible) → Competitor link rows
+- Product row: name, SKU, link count badge (green tracked / red not tracked)
+- Link row: competitor name, URL as clickable monospace link, inline pencil edit → input → save (PATCH), match badge, last-scraped time, `more` (opens full modal), Trash
+- **"Not tracked on: [+ Xcite] [+ Eureka]" chip strip** per product — click a chip → modal opens pre-filled with the right (product, competitor) pair
+
+### F. Scraper (worker) — real e-commerce hardening
+Verified end-to-end on real Kuwait sites (Xcite, Best Al-Yousifi, Eureka). Achieved 6/6 URLs scraped after iteration.
+
+- **~35 candidate selectors** covering Shopify, Magento, WooCommerce, BigCommerce, data-testid patterns, generic `.price` variants
+- **JSON-LD + og:price + `__NEXT_DATA__` parser** as fallbacks — the Next.js parser walks the JSON payload for `sellingPrice / salePrice / offerPrice / currentPrice / price / amount` keys with nested `{ amount, currency }` support
+- **15s networkidle wait** + 1.5s post-hydration beat (was 8s, Xcite TVs needed longer)
+- Better user-agent (real Chrome UA, not "PriceCompetitorBot/0.1")
+- Blocks images/media/fonts for ~4× page-load speedup
+- Records `raw_html_sample` (4KB from middle of doc) when nothing matched — surfaced in the Scrapers page HTML viewer
+- Saves `matchedSelector` for successful extractions (audit trail)
+- `parsePrice` prefers decimal numbers (`342.500`) over integers (storage sizes like `256`, `512`)
+
+### G. Image extraction
+- New `extractImage()` function in scraper.js:
+  1. `<link rel="preload" as="image">` — modern SPA hero-image signal
+  2. JSON-LD Product.image
+  3. og:image
+  4. twitter:image
+  5. Largest `<img>` ≥180×180 on the page
+- Every candidate runs through `isJunkImageUrl()` filter — rejects URLs containing `logo`, `favicon`, `sprite`, `placeholder`, `/icons/`, `banner`, `og-default`, `data:image`. This was needed because Xcite's og:image resolved to `/assets/icons/xcite-logo.png` for a while (site logo, not product photo) and cascaded to 5 products before the fix.
+- **Image cascade**: after saving `competitor_products.image_url`, worker also updates `products.image_url` via `.is('image_url', null)` filter — first competitor scrape that finds a non-junk image wins; never overwrites. Result: any product missing an image gets one from any competitor that has it.
+- Thumbnails (40×40 / 44×44) shown on Products + Comparison pages with `onError` fallback to a warm-grey Package-icon box.
+
+### H. URL auto-finder — one-click competitor discovery
+New migration: `supabase/migrations/url-finder.sql`
+- `url_find_jobs` table (product_id, competitor_id nullable, status, results JSONB, urls_found, error_summary)
+- RLS: authenticated read, admin/manager write
+
+New worker: `worker/src/find-urls.js`
+- Two strategies per competitor:
+  1. Competitor's own `searchUrlTemplate` (from `competitors.scrape_config`) e.g. `https://xcite.com/search?text={q}`
+  2. **DuckDuckGo `site:` search fallback** via `html.duckduckgo.com/html/` (works on any competitor with zero config)
+- Result filter: extracted URL must include the competitor's domain + look like a product URL (rejects `/category/`, `/search/`, homepage, etc.)
+- Skips creation if a link already exists for the (product, competitor) pair
+- Inserts `competitor_products` with `match_method='auto'`, `match_confidence=0.6`
+- **After finding URLs, immediately enqueues `scrape_runs`** for those competitors — a single tick can find + scrape end-to-end
+
+Wired into `worker/src/tick.js` BEFORE scrape processing so both chain naturally.
+
+**DDG behaviour**: works from residential IPs, but **datacenter IPs like GH Actions runners get filtered results** (returns 0 result matches). Per-competitor `searchUrlTemplate` configuration is the reliable path. Configured on Xcite/BAY/Eureka via REST.
+
+### I. Worker infrastructure
+- New `on: push` trigger scoped to `worker/**` + `.github/workflows/worker-tick.yml` in the tick workflow — any change to worker code forces an immediate tick. Zero cost, unblocks iteration when the `*/5 * * * *` cron is throttled by GH Actions (observed 90+ min gaps on this public repo).
+- `refreshOwnPrices()` in `worker/src/scraper.js` — sweeps all products with `own_url` set on every tick, scrapes each URL, updates `current_price` + `image_url` when it changes. Called from `tick.js` right after competitor scrapes.
+
+### J. Frontend: ScrapeStatusPill
+New component: `src/components/ScrapeStatusPill.jsx`
+- Fixed bottom-right on every route (mounted in `Layout`)
+- Polls `scrape_runs` every 5s for `status IN ('queued','running')`
+- Shows count + most recent competitor name
+- Click → jumps to `/scrapers`
+- Auto-hides when nothing is happening
+
+### K. New Supabase columns / migrations
+
+Full list of migrations added since Phase 1:
+- `supabase/migrations/phase-2-5.sql` — Phases 2-5 tables (from earlier)
+- `supabase/migrations/admin-user-mgmt.sql` — user CRUD SECURITY DEFINER functions
+- `supabase/migrations/url-finder.sql` — url_find_jobs table
+- Standalone `ALTER TABLE products ADD COLUMN own_url TEXT` (via SQL Editor)
+
+`competitor_products.image_url` and `products.image_url` were already in the schema — just weren't being populated until the image extractor was added.
+
+### L. Verified end-to-end
+Real data now in production:
+- 6 products in catalogue (iPhone 17 PM, S24 Ultra, A53, A56, PlayStation 5, Z Flip7) all with images from Xcite Amplience CDN
+- 10 competitor_products across Xcite / Best Al-Yousifi / Eureka
+- 15+ price_history rows with real prices in KWD
+- Auto-URL-finder queues cleanly and reports per-competitor results
+- Own-URL price refresh sweeps on every tick
+- Dashboard KPIs, Comparison matrix, Reports 4-chart grid all populate from live data
+
+### M. Design decisions worth remembering
+- Wordmark is `Prisma · Intel` (invented brand name). User hasn't decided on real brand yet.
+- Xcite hero images live at `cdn.media.amplience.net/i/xcite/<numeric-sku>-01?...`. Their site's own search page URL: `https://www.xcite.com/search?text={q}` — configured in `competitors.scrape_config.searchUrlTemplate`.
+- Eureka product URLs: `/products/details/{numeric_id}`. Search: `?instant_records[query]={q}`.
+- Best Al-Yousifi is fully SPA-rendered; both scraper and WebFetch struggle with initial-HTML extraction. Playwright with the extended hydration wait handles it.
+- Match Review page (`/#/matches`) is empty by design — the pg_trgm trigger only fires when a `competitor_products` row is inserted WITHOUT a `product_id`. In practice every row created via UI or auto-finder has a `product_id`, so no suggestions get generated. Reserved for a future sitemap-crawl feature that would discover orphan URLs.
+
+_Last updated: 2026-07-16 — premium redesign, real scraping verified end-to-end, auto-URL finder, image cascade, own-URL price refresh._
