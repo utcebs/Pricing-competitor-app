@@ -124,6 +124,7 @@ export async function runScrapeJob(run) {
 
       const { price, matchedSelector, htmlSample } = await extractPrice(page, userPriceSel)
       const inStock = await extractStock(page, userStockSel)
+      const imageUrl = await extractImage(page, cp.url)
 
       await ctx.close(); ctx = null
 
@@ -144,9 +145,11 @@ export async function runScrapeJob(run) {
           scrape_run_id: run.id,
         })
       }
-      await supabase.from('competitor_products')
-        .update({ last_seen_at: new Date().toISOString() })
-        .eq('id', cp.id)
+      // Update image_url only if we found one and cp doesn't already have
+      // a manual override (respect existing image if scraper returns null)
+      const cpUpdate = { last_seen_at: new Date().toISOString() }
+      if (imageUrl) cpUpdate.image_url = imageUrl
+      await supabase.from('competitor_products').update(cpUpdate).eq('id', cp.id)
 
       await supabase.from('scrape_jobs').insert({
         scrape_run_id: run.id,
@@ -341,5 +344,59 @@ function parseStock(text) {
   if (t.includes('in stock') || t.includes('available') || t.includes('instock')) return true
   if (t.includes('out of stock') || t.includes('unavailable') || t.includes('sold out') || t.includes('out-of-stock')) return false
   return null
+}
+
+/**
+ * Extract a product image URL. Priority:
+ *   1. <meta property="og:image">
+ *   2. <meta name="twitter:image">
+ *   3. JSON-LD product.image (from schema.org markup)
+ *   4. First large-ish <img> whose src looks like a product image
+ * Returns an absolute URL string, or null.
+ */
+async function extractImage(page, pageUrl) {
+  try {
+    // 1. og:image (strongest signal, works on nearly every modern site)
+    const og = await page.$eval(
+      'meta[property="og:image:secure_url"], meta[property="og:image"], meta[name="og:image"]',
+      el => el.getAttribute('content')
+    ).catch(() => null)
+    if (og) return absoluteUrl(og, pageUrl)
+
+    // 2. twitter:image
+    const tw = await page.$eval(
+      'meta[name="twitter:image"], meta[property="twitter:image"]',
+      el => el.getAttribute('content')
+    ).catch(() => null)
+    if (tw) return absoluteUrl(tw, pageUrl)
+
+    // 3. JSON-LD product.image
+    const jsonld = await page.$$eval(
+      'script[type="application/ld+json"]',
+      scripts => scripts.map(s => s.textContent).join('\n')
+    ).catch(() => '')
+    const ldMatch = jsonld.match(/"image"\s*:\s*"([^"]+)"/) ||
+                    jsonld.match(/"image"\s*:\s*\[\s*"([^"]+)"/)
+    if (ldMatch) return absoluteUrl(ldMatch[1], pageUrl)
+
+    // 4. First plausible product <img>
+    const src = await page.$eval(
+      'img[alt*="product" i], img.product-image, img.product-photo, .product-image img, .product-gallery img, [class*="product"] img',
+      el => el.currentSrc || el.src
+    ).catch(() => null)
+    if (src) return absoluteUrl(src, pageUrl)
+
+    return null
+  } catch {
+    return null
+  }
+}
+
+function absoluteUrl(maybeRelative, base) {
+  try {
+    return new URL(maybeRelative, base).href
+  } catch {
+    return maybeRelative
+  }
 }
 // scrape verification pass @ 2026-07-12T13:14:34Z

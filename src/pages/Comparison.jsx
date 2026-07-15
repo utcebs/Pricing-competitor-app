@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
-import { GitCompare, ArrowUpRight, ArrowDownRight, Minus, ExternalLink, Search, RefreshCw, Zap } from 'lucide-react'
+import { GitCompare, ArrowUpRight, ArrowDownRight, Minus, ExternalLink, Search, RefreshCw, Zap, Package } from 'lucide-react'
 import { NavLink } from 'react-router-dom'
 import { supabase } from '../supabaseClient'
 import { useTable } from '../lib/db'
@@ -99,7 +99,9 @@ export default function Comparison() {
       const yourPrice = p.current_price != null ? Number(p.current_price) : null
       const gapVsMinPct  = (yourPrice != null && minPrice != null) ? ((yourPrice - minPrice) / minPrice) * 100 : null
       const gapVsAvgPct  = (yourPrice != null && avgPrice != null) ? ((yourPrice - avgPrice) / avgPrice) * 100 : null
-      return { product: p, rows, minPrice, avgPrice, yourPrice, gapVsMinPct, gapVsAvgPct }
+      // Product image: user's own override > first competitor's scraped image
+      const image = p.image_url || rows.map(r => r.cp?.image_url).find(Boolean) || null
+      return { product: p, rows, minPrice, avgPrice, yourPrice, gapVsMinPct, gapVsAvgPct, image }
     })
   }, [products, cps, competitors, latestPrices])
 
@@ -235,9 +237,10 @@ export default function Comparison() {
                 {visible.map(pc => (
                   <tr key={pc.product.id} className="hover:bg-canvas-100/60 transition-colors">
                     <Td className="sticky left-0 bg-white hover:bg-canvas-100/60 z-10">
-                      <NavLink to="/prices" className="group inline-flex items-start gap-2">
-                        <div>
-                          <div className="font-semibold text-ink-900 text-[13.5px] group-hover:text-brand-700">
+                      <NavLink to="/prices" className="group flex items-center gap-3">
+                        <ProductThumb src={pc.image} name={pc.product.name} />
+                        <div className="min-w-0">
+                          <div className="font-semibold text-ink-900 text-[13.5px] group-hover:text-brand-700 truncate">
                             {pc.product.name}
                           </div>
                           <div className="flex items-center gap-2 mt-0.5">
@@ -358,6 +361,26 @@ function MiniGap({ pct }) {
 function symbolFor(code) {
   const map = { KWD:'KD', USD:'$', EUR:'€', AED:'AED', SAR:'SAR', GBP:'£' }
   return map[code] || code || ''
+}
+
+function ProductThumb({ src, name }) {
+  const [failed, setFailed] = useState(false)
+  if (!src || failed) {
+    return (
+      <div className="w-11 h-11 rounded-lg bg-canvas-100 border border-ink-100 flex items-center justify-center text-ink-400 flex-shrink-0">
+        <Package size={16} strokeWidth={1.5} />
+      </div>
+    )
+  }
+  return (
+    <img
+      src={src}
+      alt={name}
+      loading="lazy"
+      onError={() => setFailed(true)}
+      className="w-11 h-11 rounded-lg object-cover border border-ink-100 bg-white flex-shrink-0"
+    />
+  )
 }
 
 function relTime(d) {

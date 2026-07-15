@@ -173,10 +173,17 @@ export default function Products() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-ink-100">
-                {filtered.map(p => (
+                {filtered.map(p => {
+                  const image = p.image_url || cps.find(c => c.product_id === p.id && c.image_url)?.image_url || null
+                  return (
                   <tr key={p.id} className="hover:bg-canvas-100">
                     <Td className="font-mono text-xs">{p.sku}</Td>
-                    <Td className="font-medium">{p.name}</Td>
+                    <Td>
+                      <div className="flex items-center gap-3">
+                        <ProductThumb src={image} name={p.name} />
+                        <span className="font-medium">{p.name}</span>
+                      </div>
+                    </Td>
                     <Td className="text-ink-500">{p.brand || '—'}</Td>
                     <Td className="text-ink-500">{catName(p.category_id)}</Td>
                     <Td className="text-right tabular-nums text-ink-500">
@@ -217,7 +224,7 @@ export default function Products() {
                       </Td>
                     )}
                   </tr>
-                ))}
+                )})}
               </tbody>
             </table>
           </div>
@@ -456,4 +463,24 @@ function Th({ children, className = '' }) {
 }
 function Td({ children, className = '' }) {
   return <td className={`px-4 py-3 text-sm text-ink-700 ${className}`}>{children}</td>
+}
+
+function ProductThumb({ src, name }) {
+  const [failed, setFailed] = useState(false)
+  if (!src || failed) {
+    return (
+      <div className="w-10 h-10 rounded-lg bg-canvas-100 border border-ink-100 flex items-center justify-center text-ink-400 flex-shrink-0">
+        <Package size={14} strokeWidth={1.5} />
+      </div>
+    )
+  }
+  return (
+    <img
+      src={src}
+      alt={name}
+      loading="lazy"
+      onError={() => setFailed(true)}
+      className="w-10 h-10 rounded-lg object-cover border border-ink-100 bg-white flex-shrink-0"
+    />
+  )
 }
