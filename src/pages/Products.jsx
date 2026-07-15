@@ -156,7 +156,13 @@ export default function Products() {
         categories={categories}
         currencies={currencies}
         onClose={close}
-        onSaved={() => { close(); refresh() }}
+        onSaved={(findQueued) => {
+          close(); refresh(); refreshCps()
+          if (findQueued) {
+            setToast('Product saved — searching for competitor URLs across all active sites. Results in ~5 minutes.')
+            setTimeout(() => setToast(''), 10000)
+          }
+        }}
       />
 
       <ConfirmDialog
@@ -229,9 +235,11 @@ export default function Products() {
 }
 
 function ProductForm({ open, product, categories, currencies, onClose, onSaved }) {
+  const { user } = useAuth()
   const [form, setForm] = useState({})
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+  const [autoFind, setAutoFind] = useState(true)
 
   const isNew = !product?.id
 
@@ -244,6 +252,7 @@ function ProductForm({ open, product, categories, currencies, onClose, onSaved }
       currency_code: 'KWD', is_own_brand: false, is_active: true,
       ...product,
     })
+    setAutoFind(true)   // default ON for new products; ignored for edits
     setErr('')
   }, [open, product?.id])
 
@@ -259,9 +268,24 @@ function ProductForm({ open, product, categories, currencies, onClose, onSaved }
         else payload[k] = Number(payload[k])
       })
       if (!payload.category_id) payload.category_id = null
-      const { error } = await saveRow('products', payload)
+      const { data, error } = await saveRow('products', payload)
       if (error) throw error
-      onSaved()
+
+      // If it's a NEW product AND the user checked "auto-find URLs",
+      // queue a url_find_jobs row so the worker searches every active
+      // competitor for a matching URL on its next tick.
+      let findQueued = false
+      if (isNew && autoFind && data?.id) {
+        const { error: findErr } = await supabase.from('url_find_jobs').insert({
+          product_id: data.id,
+          triggered_by: user?.id,
+        })
+        // Swallow "table not found" quietly — user hasn't run the migration.
+        // The saved product is still valid; onSaved will just skip the toast.
+        if (!findErr) findQueued = true
+      }
+
+      onSaved(findQueued)
     } catch (e) {
       setErr(e.message || 'Save failed')
     } finally {
@@ -322,6 +346,28 @@ function ProductForm({ open, product, categories, currencies, onClose, onSaved }
       </div>
 
       {err && <div className="mt-4 text-sm text-red-600">{err}</div>}
+
+      {isNew && (
+        <div className="mt-5 p-3.5 rounded-xl border border-brand-100 bg-brand-50/60">
+          <label className="flex items-start gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={autoFind}
+              onChange={e => setAutoFind(e.target.checked)}
+              className="mt-0.5 h-4 w-4 accent-brand-600"
+            />
+            <div className="flex-1 min-w-0">
+              <div className="text-[13px] font-semibold text-ink-900 inline-flex items-center gap-1.5">
+                <Sparkles size={13} className="text-brand-600" />
+                Auto-find URLs on active competitor sites
+              </div>
+              <div className="text-[11.5px] text-ink-600 mt-0.5 leading-relaxed">
+                After saving, the worker will search every active competitor for a matching URL and link it automatically. Results in ~5 minutes. You can review or unlink each match on the Linked Items page.
+              </div>
+            </div>
+          </label>
+        </div>
+      )}
 
       <div className="flex justify-end gap-2 mt-6 pt-4 border-t border-ink-100">
         <Button variant="secondary" onClick={onClose}>Cancel</Button>
