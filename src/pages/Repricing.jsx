@@ -23,7 +23,7 @@ const SCOPES = [
 ]
 
 export default function Repricing() {
-  const { isManager } = useAuth()
+  const { isManager, isAdmin } = useAuth()
   const { rows: rules, loading, error, refresh } = useTable('pricing_rules', {
     order: ['priority', { ascending: true }],
   })
@@ -36,6 +36,8 @@ export default function Repricing() {
 
   const [editing, setEditing] = useState(null)
   const [toDelete, setToDelete] = useState(null)
+
+  if (!isAdmin) return <Empty icon={Repeat} title="Admins only" description="Repricing rules affect live pricing decisions. Only administrators can view or edit them." />
 
   return (
     <div>

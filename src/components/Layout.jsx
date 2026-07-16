@@ -20,17 +20,20 @@ const PRIMARY_NAV = [
   { path: '/prices',              key: 'nav.trends',       icon: LineChart },
   { path: '/prices/new',          key: 'nav.entry',        icon: DollarSign },
 ]
+// Everyone (manager + viewer + admin) sees these
 const OPS_NAV = [
   { path: '/scrapers',      key: 'nav.scrapers',   icon: Play },
   { path: '/matches',       key: 'nav.matches',    icon: Sparkles },
   { path: '/alerts',        key: 'nav.alerts',     icon: Bell },
   { path: '/reports',       key: 'nav.reports',    icon: FileBarChart },
-  { path: '/repricing',     key: 'nav.repricing',  icon: Repeat },
-  { path: '/integrations',  key: 'nav.integrations', icon: Plug },
 ]
+// Admin only — repricing rules touch pricing decisions + integrations
+// hold API credentials for Dynamics 365 / Shopify etc.
 const ADMIN_NAV = [
-  { path: '/categories',    key: 'nav.categories', icon: FolderTree },
-  { path: '/users',         key: 'nav.users',      icon: UserCog },
+  { path: '/repricing',     key: 'nav.repricing',    icon: Repeat },
+  { path: '/integrations',  key: 'nav.integrations', icon: Plug },
+  { path: '/categories',    key: 'nav.categories',   icon: FolderTree },
+  { path: '/users',         key: 'nav.users',        icon: UserCog },
 ]
 
 export default function Layout() {

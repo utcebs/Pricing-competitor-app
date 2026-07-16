@@ -62,7 +62,7 @@ const KINDS = [
 ]
 
 export default function Integrations() {
-  const { isManager } = useAuth()
+  const { isManager, isAdmin } = useAuth()
   const { rows, loading, error, refresh } = useTable('integrations', {
     order: ['kind', { ascending: true }],
   })
@@ -73,6 +73,8 @@ export default function Integrations() {
 
   const [editing, setEditing] = useState(null)
   const [toDelete, setToDelete] = useState(null)
+
+  if (!isAdmin) return <Empty icon={Plug} title="Admins only" description="Integrations hold API credentials for Dynamics 365, Shopify, and other partner systems. Only administrators can view or edit them." />
 
   return (
     <div>
