@@ -133,14 +133,11 @@ function ensureDigitLocalizer(enable) {
  * Convert Western-Arabic digits (0-9) in a string to Arabic-Indic (٠-٩)
  * when the current locale is Arabic. Non-digit characters pass through
  * unchanged, so 'KD 409.900' becomes 'KD ٤٠٩٫٩٠٠'.
+ * (AR_DIGITS declared below, hoisted via const-in-module semantics.)
  */
-const AR_DIGITS = ['٠','١','٢','٣','٤','٥','٦','٧','٨','٩']
 export function localizeDigits(text) {
   if (i18n.language !== 'ar' || text == null) return text
-  return String(text)
-    .replace(/\d/g, d => AR_DIGITS[+d])
-    .replace(/\./g, '٫')   // Arabic decimal separator
-    .replace(/,/g, '٬')    // Arabic thousands separator
+  return localizeText(String(text))
 }
 
 export default i18n
