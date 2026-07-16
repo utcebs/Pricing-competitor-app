@@ -54,13 +54,13 @@ export default function Layout() {
         <div className="absolute top-0 right-0 w-px h-full bg-gradient-to-b from-brand-500/40 via-transparent to-transparent" />
 
         {/* Wordmark — logo inverted so black-on-transparent shows as white on dark sidebar */}
-        <div className="px-6 pt-7 pb-6">
+        <div className="px-4 pt-8 pb-6 flex flex-col items-center text-center">
           <img
             src={`${import.meta.env.BASE_URL}logo.png`}
             alt="Union Trading Co."
-            className="h-9 w-auto object-contain [filter:brightness(0)_invert(1)]"
+            className="h-16 w-auto max-w-full object-contain [filter:brightness(0)_invert(1)]"
           />
-          <div className="text-[9.5px] uppercase tracking-[0.22em] text-ink-500 mt-3 font-medium">
+          <div className="text-[9.5px] uppercase tracking-[0.22em] text-ink-500 mt-4 font-medium">
             Competitive Pricing
           </div>
         </div>
