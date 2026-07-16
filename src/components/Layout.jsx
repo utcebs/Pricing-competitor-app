@@ -53,14 +53,14 @@ export default function Layout() {
         {/* Faint gold accent line */}
         <div className="absolute top-0 right-0 w-px h-full bg-gradient-to-b from-brand-500/40 via-transparent to-transparent" />
 
-        {/* Wordmark */}
+        {/* Wordmark — logo inverted so black-on-transparent shows as white on dark sidebar */}
         <div className="px-6 pt-7 pb-6">
-          <div className="flex items-baseline gap-1.5">
-            <div className="font-display text-[22px] tracking-tight text-white leading-none">Prisma</div>
-            <div className="text-brand-400 text-[22px] leading-none">·</div>
-            <div className="font-display text-[16px] tracking-tight text-ink-400 leading-none italic">Intel</div>
-          </div>
-          <div className="text-[9.5px] uppercase tracking-[0.22em] text-ink-500 mt-2 font-medium">
+          <img
+            src={`${import.meta.env.BASE_URL}logo.png`}
+            alt="Union Trading Co."
+            className="h-9 w-auto object-contain [filter:brightness(0)_invert(1)]"
+          />
+          <div className="text-[9.5px] uppercase tracking-[0.22em] text-ink-500 mt-3 font-medium">
             Competitive Pricing
           </div>
         </div>

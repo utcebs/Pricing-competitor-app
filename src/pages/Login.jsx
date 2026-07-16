@@ -38,12 +38,12 @@ export default function Login() {
         />
         <div className="relative w-full flex flex-col justify-between p-14">
           <div>
-            <div className="flex items-baseline gap-1.5">
-              <div className="font-display text-[30px] tracking-tight leading-none">Prisma</div>
-              <div className="text-brand-400 text-[30px] leading-none">·</div>
-              <div className="font-display text-[22px] tracking-tight text-ink-300 leading-none italic">Intel</div>
-            </div>
-            <div className="text-[10px] uppercase tracking-[0.24em] text-ink-400 mt-2.5 font-medium">
+            <img
+              src={`${import.meta.env.BASE_URL}logo.png`}
+              alt="Union Trading Co."
+              className="h-14 w-auto object-contain [filter:brightness(0)_invert(1)]"
+            />
+            <div className="text-[10px] uppercase tracking-[0.24em] text-ink-400 mt-4 font-medium">
               Competitive Pricing Intelligence
             </div>
           </div>
@@ -68,7 +68,7 @@ export default function Login() {
           </div>
 
           <div className="text-[11px] text-ink-500 tracking-wider uppercase">
-            © 2026 Prisma Intel — All rights reserved
+            © 2026 Union Trading Co. — All rights reserved
           </div>
         </div>
       </div>
@@ -77,10 +77,12 @@ export default function Login() {
       <div className="flex-1 flex items-center justify-center p-6 lg:p-12">
         <div className="w-full max-w-[400px]">
           <div className="mb-8">
-            <div className="lg:hidden flex items-baseline gap-1.5 mb-8">
-              <div className="font-display text-[28px] tracking-tight text-ink-900 leading-none">Prisma</div>
-              <div className="text-brand-500 text-[28px] leading-none">·</div>
-              <div className="font-display text-[20px] tracking-tight text-ink-500 leading-none italic">Intel</div>
+            <div className="lg:hidden mb-8">
+              <img
+                src={`${import.meta.env.BASE_URL}logo.png`}
+                alt="Union Trading Co."
+                className="h-10 w-auto object-contain"
+              />
             </div>
             <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-brand-600 mb-3">
               Sign in
