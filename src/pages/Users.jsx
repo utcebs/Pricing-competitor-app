@@ -5,7 +5,7 @@ import { useTable } from '../lib/db'
 import { useAuth } from '../lib/auth'
 import {
   PageHeader, Card, Empty, LoadingBlock, ErrorBlock, Badge,
-  Button, Modal, ConfirmDialog, Field, inputCls, selectCls,
+  Button, Modal, ConfirmDialog, Field, inputCls, selectCls, normaliseError,
 } from '../components/UI'
 
 const ROLES = ['admin', 'manager', 'viewer']
@@ -23,6 +23,13 @@ export default function Users() {
   const [toDelete, setToDelete] = useState(null)
   const [resetTarget, setResetTarget] = useState(null)
 
+  const [toast, setToast] = useState(null)   // { kind: 'error'|'success', msg }
+
+  const showToast = (kind, msg) => {
+    setToast({ kind, msg })
+    setTimeout(() => setToast(null), 6000)
+  }
+
   const setRole = async (userId, role) => {
     if (userId === me?.id && role !== 'admin') {
       if (!confirm('This will remove YOUR admin access. Continue?')) return
@@ -30,16 +37,19 @@ export default function Users() {
     setBusy(userId)
     const { error } = await supabase.from('profiles').update({ role }).eq('id', userId)
     setBusy(null)
-    if (error) { alert('Failed: ' + error.message); return }
+    if (error) { showToast('error', 'Role change failed: ' + normaliseError(error)); return }
+    showToast('success', `Role updated to ${role}`)
     refresh()
   }
 
   const deleteUser = async () => {
     if (!toDelete) return
     setBusy(toDelete.id)
+    const email = toDelete.email
     const { error } = await supabase.rpc('admin_delete_user', { p_id: toDelete.id })
     setBusy(null); setToDelete(null)
-    if (error) { alert('Delete failed: ' + error.message); return }
+    if (error) { showToast('error', 'Delete failed: ' + normaliseError(error)); return }
+    showToast('success', `Deleted ${email}`)
     refresh()
   }
 
@@ -59,6 +69,16 @@ export default function Users() {
           </Button>
         }
       />
+
+      {toast && (
+        <div className={`mb-4 text-[12.5px] px-3.5 py-2.5 rounded-lg border inline-flex items-center gap-2 ${
+          toast.kind === 'error'
+            ? 'bg-red-50 border-red-100 text-red-800'
+            : 'bg-emerald-50 border-emerald-100 text-emerald-800'
+        }`}>
+          {toast.msg}
+        </div>
+      )}
 
       {/* Role summary */}
       <div className="grid grid-cols-3 gap-4 mb-6">
@@ -158,13 +178,19 @@ export default function Users() {
       <NewUserModal
         open={newOpen}
         onClose={() => setNewOpen(false)}
-        onCreated={() => { setNewOpen(false); refresh() }}
+        onCreated={(email) => {
+          setNewOpen(false); refresh()
+          showToast('success', `User ${email || 'created'} — they can sign in now.`)
+        }}
       />
 
       <PasswordResetModal
         target={resetTarget}
         onClose={() => setResetTarget(null)}
-        onDone={() => setResetTarget(null)}
+        onDone={(email) => {
+          setResetTarget(null)
+          showToast('success', `Password reset for ${email}. Share the new password securely.`)
+        }}
       />
 
       <ConfirmDialog
@@ -191,15 +217,33 @@ function NewUserModal({ open, onClose, onCreated }) {
 
   const submit = async () => {
     setBusy(true); setErr('')
-    const { error } = await supabase.rpc('admin_create_user', {
-      p_email: form.email.trim(),
-      p_password: form.password,
-      p_full_name: form.full_name.trim() || null,
-      p_role: form.role,
-    })
-    setBusy(false)
-    if (error) { setErr(error.message); return }
-    onCreated?.()
+    try {
+      const { data, error } = await supabase.rpc('admin_create_user', {
+        p_email: form.email.trim(),
+        p_password: form.password,
+        p_full_name: form.full_name.trim() || null,
+        p_role: form.role,
+      })
+      if (error) throw error
+      if (!data) throw new Error('User was not created — no id returned. Contact admin.')
+      onCreated?.(form.email.trim())
+    } catch (e) {
+      const raw = normaliseError(e)
+      // Friendly translations for common failures
+      const friendly = raw.includes('duplicate key') || raw.includes('already exists')
+        ? 'A user with that email already exists.'
+        : raw.includes('gen_salt') || raw.includes('crypt(')
+        ? 'Database is missing the pgcrypto extension. Ask admin to run the extensions.crypt migration.'
+        : raw.includes('Only admins')
+        ? "Only admins can create users. You're signed in as a manager or viewer."
+        : raw.includes('PGRST202') || raw.includes('function public.admin_create_user')
+        ? 'admin_create_user function is missing from the database. Ask admin to run the SQL migration.'
+        : raw
+      setErr(friendly)
+      console.error('[create-user]', e)
+    } finally {
+      setBusy(false)
+    }
   }
 
   return (
@@ -257,13 +301,18 @@ function PasswordResetModal({ target, onClose, onDone }) {
 
   const submit = async () => {
     setBusy(true); setErr('')
-    const { error } = await supabase.rpc('admin_reset_password', {
-      p_id: target.id, p_new_password: pw,
-    })
-    setBusy(false)
-    if (error) { setErr(error.message); return }
-    alert(`Password reset for ${target.email}. Share the new password securely.`)
-    onDone?.()
+    try {
+      const { error } = await supabase.rpc('admin_reset_password', {
+        p_id: target.id, p_new_password: pw,
+      })
+      if (error) throw error
+      onDone?.(target.email)
+    } catch (e) {
+      setErr(normaliseError(e))
+      console.error('[reset-password]', e)
+    } finally {
+      setBusy(false)
+    }
   }
 
   return (

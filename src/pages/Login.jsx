@@ -16,11 +16,31 @@ export default function Login() {
     e.preventDefault()
     setError(''); setBusy(true)
     try {
-      const { error } = await signIn(email, password)
+      const { data, error } = await signIn(email, password)
       if (error) throw error
+      if (!data?.session) throw new Error('Sign-in returned no session — try again or contact admin')
       navigate('/')
     } catch (err) {
-      setError(err.message || 'Sign-in failed')
+      // Surface EVERY shape the error can take: Error, string, {message}, {error_description}, or worst-case object
+      const raw =
+        err?.message ||
+        err?.error_description ||
+        err?.error?.message ||
+        (typeof err === 'string' ? err : null) ||
+        (err && typeof err === 'object' ? JSON.stringify(err) : null) ||
+        'Sign-in failed'
+      // Friendly translations for known Supabase Auth codes
+      const friendly = raw.toLowerCase().includes('invalid login') || raw.toLowerCase().includes('invalid_credentials')
+        ? 'Wrong email or password. Check your credentials or ask an admin to reset your password.'
+        : raw.toLowerCase().includes('email not confirmed')
+        ? 'Your email needs confirmation. Ask an admin to enable this account.'
+        : raw.toLowerCase().includes('rate limit') || raw.toLowerCase().includes('too many')
+        ? 'Too many attempts. Wait a minute and try again.'
+        : raw === '{}' || raw === ''
+        ? 'Sign-in failed with no details. Your account may be missing an identity record — ask an admin to re-create the account.'
+        : raw
+      setError(friendly)
+      console.error('[login] error:', err)
     } finally { setBusy(false) }
   }
 

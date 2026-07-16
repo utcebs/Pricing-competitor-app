@@ -173,15 +173,37 @@ export function LoadingBlock({ text = 'Loading' }) {
 
 export function ErrorBlock({ error, onRetry }) {
   if (!error) return null
+  // Normalise every possible shape into a readable string
+  const msg = normaliseError(error)
   return (
     <div className="p-4 rounded-xl bg-red-50 border border-red-100 text-sm text-red-800 mb-4">
       <div className="font-semibold">Something went wrong</div>
-      <div className="mt-1 text-red-700 break-all">{error}</div>
+      <div className="mt-1 text-red-700 break-all">{msg}</div>
       {onRetry && (
         <button onClick={onRetry} className="text-xs font-semibold underline mt-2 hover:no-underline">Try again</button>
       )}
     </div>
   )
+}
+
+/** Convert any error shape (Error, string, {message}, PostgREST error, worst-case object) into a readable string. */
+export function normaliseError(e) {
+  if (!e) return ''
+  if (typeof e === 'string') return e
+  if (e.message) return e.message
+  if (e.error_description) return e.error_description
+  if (e.error?.message) return e.error.message
+  if (e.details) return e.details
+  if (e.hint) return e.hint
+  if (typeof e === 'object') {
+    try {
+      const s = JSON.stringify(e)
+      return s === '{}' ? 'Empty error returned from server (check console for details).' : s
+    } catch {
+      return String(e)
+    }
+  }
+  return String(e)
 }
 
 // Small stat block — for dashboards, page headers etc.
