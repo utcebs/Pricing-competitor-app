@@ -1,8 +1,10 @@
+import { Suspense } from 'react'
 import { NavLink, Outlet, Navigate } from 'react-router-dom'
 import {
   LayoutDashboard, Package, Building2, LineChart, Bell,
   FileBarChart, Settings, LogOut, Link2, DollarSign,
   FolderTree, UserCog, Play, Sparkles, Repeat, Plug, GitCompare,
+  Loader2,
 } from 'lucide-react'
 import { useAuth } from '../lib/auth'
 import { setLanguage } from '../lib/i18n'
@@ -122,7 +124,11 @@ export default function Layout() {
       {/* ── Main ────────────────────────────────────────── */}
       <main className="flex-1 overflow-y-auto relative">
         <div className="max-w-[1240px] mx-auto px-8 lg:px-12 py-10">
-          <Outlet />
+          {/* Suspense INSIDE the layout — sidebar stays put while the page chunk loads.
+              Fallback matches the canvas colour so there's no white flash mid-navigation. */}
+          <Suspense fallback={<PageFallback />}>
+            <Outlet />
+          </Suspense>
         </div>
         <ScrapeStatusPill />
       </main>
@@ -134,6 +140,20 @@ function SectionLabel({ children }) {
   return (
     <div className="mt-6 mb-2.5 px-3 text-[9.5px] font-semibold uppercase tracking-[0.2em] text-ink-500">
       {children}
+    </div>
+  )
+}
+
+/**
+ * Route-transition fallback. Kept subtle — a tiny centred spinner that
+ * matches the canvas background so the sidebar + page frame don't
+ * appear to flash. Most page chunks load in <200ms after the first visit
+ * (browser cache), so this rarely shows for long.
+ */
+function PageFallback() {
+  return (
+    <div className="min-h-[40vh] flex items-center justify-center text-ink-400">
+      <Loader2 size={18} className="animate-spin" />
     </div>
   )
 }
