@@ -61,9 +61,9 @@ export default function Login() {
             <img
               src={`${import.meta.env.BASE_URL}logo.png`}
               alt="Union Trading Co."
-              className="h-14 w-auto object-contain [filter:brightness(0)_invert(1)]"
+              className="h-28 w-auto object-contain [filter:brightness(0)_invert(1)]"
             />
-            <div className="text-[10px] uppercase tracking-[0.24em] text-ink-400 mt-4 font-medium">
+            <div className="text-[10px] uppercase tracking-[0.24em] text-ink-400 mt-5 font-medium">
               Competitive Pricing Intelligence
             </div>
           </div>
@@ -100,7 +100,7 @@ export default function Login() {
               <img
                 src={`${import.meta.env.BASE_URL}logo.png`}
                 alt="Union Trading Co."
-                className="h-10 w-auto object-contain"
+                className="h-16 w-auto object-contain"
               />
             </div>
             <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-brand-600 mb-3">
