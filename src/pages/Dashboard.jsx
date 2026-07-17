@@ -81,6 +81,8 @@ export default function Dashboard() {
       const avgRival = rivalPrices.length ? rivalPrices.reduce((a, b) => a + b, 0) / rivalPrices.length : null
       const yourPrice = p.current_price != null ? Number(p.current_price) : null
       const minPriceFloor = p.min_price != null ? Number(p.min_price) : null
+      const costPrice = p.cost_price != null ? Number(p.cost_price) : null
+      const targetMarginPct = p.target_margin != null ? Number(p.target_margin) : null
 
       const gapVsMinPct = (yourPrice != null && minRival != null)
         ? ((yourPrice - minRival) / minRival) * 100 : null
@@ -96,6 +98,7 @@ export default function Dashboard() {
         rivalCount: priced.length,
         linkCount: productLinks.length,
         yourPrice, minRival, avgRival, minPriceFloor,
+        costPrice, targetMarginPct,
         gapVsMinPct, gapVsAvgPct,
         cheapestLink,
       }
@@ -440,12 +443,52 @@ function KpiTile({ icon: Icon, label, value, hint, tone = 'ink', pulse }) {
   )
 }
 
-function PriorityRow({ intel }) {
-  const { product, yourPrice, minRival, cheapestLink, gapVsMinPct, minPriceFloor } = intel
-  // Suggested price = cheapest rival − $0.01, respecting min_price floor
-  const suggested = minRival != null
-    ? Math.max(minRival - 0.001, minPriceFloor || 0)
+/**
+ * Suggest a price that:
+ *   1. Beats the cheapest rival by 1 fils where possible
+ *   2. Never sells below cost
+ *   3. Honors an absolute min_price floor if set
+ *   4. Keeps gross margin ≥ target_margin (margin = (price − cost) / price)
+ * If undercutting the rival would violate any floor, we return the highest
+ * applicable floor and flag mode='floor' so the UI can explain why.
+ */
+export function computeSuggestion({ minRival, costPrice, targetMarginPct, minPriceFloor }) {
+  if (minRival == null) return null
+
+  const marginFloor =
+    costPrice != null && targetMarginPct != null && targetMarginPct < 100
+      ? costPrice / (1 - targetMarginPct / 100)
+      : null
+
+  const floors = [marginFloor, minPriceFloor, costPrice].filter(v => v != null && v >= 0)
+  const effectiveFloor = floors.length ? Math.max(...floors) : 0
+  const activeFloor = floors.length
+    ? (marginFloor === effectiveFloor ? 'margin'
+      : minPriceFloor === effectiveFloor ? 'min'
+      : 'cost')
     : null
+
+  const undercut = minRival - 0.001
+  const canUndercut = undercut >= effectiveFloor
+  const price = canUndercut ? undercut : effectiveFloor
+  const mode = canUndercut ? 'competitive' : 'floor'
+  const achievedMarginPct =
+    costPrice != null && price > 0 ? ((price - costPrice) / price) * 100 : null
+
+  return { price, mode, achievedMarginPct, activeFloor, effectiveFloor }
+}
+
+function PriorityRow({ intel }) {
+  const { product, yourPrice, minRival, cheapestLink, gapVsMinPct,
+          minPriceFloor, costPrice, targetMarginPct } = intel
+  const s = computeSuggestion({ minRival, costPrice, targetMarginPct, minPriceFloor })
+
+  const floorLabel = s?.activeFloor === 'margin'
+    ? `holds ${targetMarginPct}% margin`
+    : s?.activeFloor === 'min' ? 'at min_price floor'
+    : s?.activeFloor === 'cost' ? 'at cost (0% margin)'
+    : null
+
   return (
     <div className="px-6 py-4 hover:bg-canvas-100/40 transition-colors">
       <div className="flex items-start justify-between gap-4">
@@ -463,14 +506,34 @@ function PriorityRow({ intel }) {
             </span>
             <GapPill pct={gapVsMinPct} />
           </div>
+          {s && (costPrice != null || targetMarginPct != null) && (
+            <div className="mt-1 text-[11px] text-ink-500 flex items-center gap-2 flex-wrap">
+              {costPrice != null && <span>Cost <b className="tabular-nums text-ink-700">KD {costPrice.toFixed(3)}</b></span>}
+              {targetMarginPct != null && <span>· Target margin <b className="text-ink-700">{targetMarginPct}%</b></span>}
+              {s.achievedMarginPct != null && (
+                <span>· At suggest → <b className={s.achievedMarginPct >= (targetMarginPct ?? 0) ? 'text-emerald-700' : 'text-amber-700'}>{s.achievedMarginPct.toFixed(1)}%</b> margin</span>
+              )}
+            </div>
+          )}
         </div>
         <div className="flex flex-col items-end gap-1 flex-shrink-0">
-          {suggested != null && (
+          {s && (
             <div className="text-right">
-              <div className="text-[9.5px] uppercase tracking-[0.14em] text-ink-500 font-semibold">Suggest</div>
-              <div className="font-display text-[17px] leading-none text-brand-700 tabular-nums mt-0.5">
-                KD {suggested.toFixed(3)}
+              <div className="text-[9.5px] uppercase tracking-[0.14em] text-ink-500 font-semibold flex items-center gap-1 justify-end">
+                Suggest
+                {s.mode === 'floor' && (
+                  <span title={`Can't undercut cheapest rival without violating the ${s.activeFloor} floor.`}
+                    className="px-1 py-px rounded bg-amber-100 text-amber-800 text-[8.5px] font-bold uppercase tracking-wider">
+                    floor
+                  </span>
+                )}
               </div>
+              <div className={`font-display text-[17px] leading-none tabular-nums mt-0.5 ${s.mode === 'floor' ? 'text-amber-700' : 'text-brand-700'}`}>
+                KD {s.price.toFixed(3)}
+              </div>
+              {floorLabel && s.mode === 'floor' && (
+                <div className="text-[9.5px] text-amber-700 mt-0.5">{floorLabel}</div>
+              )}
             </div>
           )}
           <NavLink to="/comparison" className="text-[11px] text-brand-700 hover:underline mt-0.5">
