@@ -51,7 +51,12 @@ export default function Competitors() {
               <tbody className="divide-y divide-ink-100">
                 {competitors.map(c => (
                   <tr key={c.id} className="hover:bg-canvas-100">
-                    <Td className="font-medium">{c.name}</Td>
+                    <Td>
+                      <div className="flex items-center gap-3">
+                        <CompetitorLogo domain={c.domain} name={c.name} />
+                        <span className="font-medium">{c.name}</span>
+                      </div>
+                    </Td>
                     <Td>
                       <a href={`https://${c.domain}`} target="_blank" rel="noopener noreferrer"
                          className="text-brand-600 hover:underline inline-flex items-center gap-1">
@@ -180,8 +185,13 @@ function CompetitorForm({ open, competitor, onClose, onSaved }) {
         <Field label="Name" required>
           <input className={inputCls} value={form.name || ''} onChange={e => set('name', e.target.value)} />
         </Field>
-        <Field label="Domain" required hint="e.g. competitor.com (no https://)">
-          <input className={inputCls} value={form.domain || ''} onChange={e => set('domain', e.target.value)} />
+        <Field label="Domain" required hint="e.g. competitor.com (no https://). Logo appears automatically from the domain.">
+          <div className="flex items-center gap-2">
+            <input className={`${inputCls} flex-1`} value={form.domain || ''} onChange={e => set('domain', e.target.value)} placeholder="competitor.com" />
+            {form.domain?.trim() && (
+              <CompetitorLogo domain={form.domain.trim()} name={form.name} size={36} />
+            )}
+          </div>
         </Field>
         <Field label="Country" hint="ISO code — KW, SA, AE, etc.">
           <input className={inputCls} value={form.country || ''} onChange={e => set('country', e.target.value.toUpperCase())} maxLength={2} />
@@ -223,4 +233,33 @@ function Th({ children, className = '' }) {
 }
 function Td({ children, className = '' }) {
   return <td className={`px-4 py-3 text-sm text-ink-700 ${className}`}>{children}</td>
+}
+
+/**
+ * CompetitorLogo — renders the site's favicon via Google's public
+ * favicon service (no signup, HTTPS, cached by Google's CDN). Falls
+ * back to a Building icon if the image fails to load.
+ * Docs: https://www.google.com/s2/favicons?domain=<domain>&sz=64
+ */
+export function CompetitorLogo({ domain, name, size = 40 }) {
+  const [failed, setFailed] = useState(false)
+  const clean = String(domain || '').replace(/^https?:\/\//, '').split('/')[0].replace(/^www\./, '')
+  if (!clean || failed) {
+    return (
+      <div className="rounded-lg bg-canvas-100 border border-ink-100 flex items-center justify-center text-ink-400 flex-shrink-0"
+           style={{ width: size, height: size }}>
+        <Building2 size={Math.round(size * 0.5)} strokeWidth={1.5} />
+      </div>
+    )
+  }
+  return (
+    <img
+      src={`https://www.google.com/s2/favicons?domain=${clean}&sz=64`}
+      alt={name || clean}
+      onError={() => setFailed(true)}
+      loading="lazy"
+      className="rounded-lg object-contain border border-ink-100 bg-white flex-shrink-0 p-1.5"
+      style={{ width: size, height: size }}
+    />
+  )
 }

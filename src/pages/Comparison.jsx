@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react'
+import React, { useState, useEffect, useMemo, useRef } from 'react'
 import { GitCompare, ArrowUpRight, ArrowDownRight, Minus, ExternalLink, Search, RefreshCw, Zap, Package } from 'lucide-react'
 import { NavLink } from 'react-router-dom'
 import { supabase } from '../supabaseClient'
@@ -139,6 +139,31 @@ export default function Comparison() {
   const capped = visible.length > RENDER_CAP
   const visibleRows = capped ? visible.slice(0, RENDER_CAP) : visible
 
+  // Group by category, preserving the sort order within each group.
+  // Uncategorised bucket lands last.
+  const categoryGroups = useMemo(() => {
+    const catById = Object.fromEntries(categories.map(c => [c.id, c]))
+    const buckets = new Map()   // key: categoryId or 'uncat'
+    for (const pc of visibleRows) {
+      const key = pc.product.category_id ?? 'uncat'
+      if (!buckets.has(key)) {
+        buckets.set(key, {
+          key,
+          name: catById[pc.product.category_id]?.name || 'Uncategorised',
+          rows: [],
+        })
+      }
+      buckets.get(key).rows.push(pc)
+    }
+    return [...buckets.values()].sort((a, b) => {
+      if (a.key === 'uncat') return 1
+      if (b.key === 'uncat') return -1
+      return a.name.localeCompare(b.name)
+    })
+  }, [visibleRows, categories])
+
+  const totalColumns = 4 + competitors.length   // sticky+your+cheapest+gap + per-competitor
+
   const loading = pL || cL || lL || priceLoading
   const error   = pErr || cErr || lErr || priceErr
 
@@ -246,7 +271,22 @@ export default function Comparison() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-ink-100">
-                {visibleRows.map(pc => (
+                {categoryGroups.map(group => (
+                  <React.Fragment key={group.key}>
+                    <tr className="bg-canvas-100 sticky top-0 z-20">
+                      <td colSpan={totalColumns}
+                          className="px-5 py-2.5 border-y border-ink-200">
+                        <div className="flex items-baseline gap-3">
+                          <div className="font-display text-[14px] tracking-tight text-ink-900">
+                            {group.name}
+                          </div>
+                          <div className="text-[10.5px] uppercase tracking-[0.12em] text-ink-500 font-semibold">
+                            {group.rows.length} product{group.rows.length === 1 ? '' : 's'}
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                    {group.rows.map(pc => (
                   <tr key={pc.product.id} className="hover:bg-canvas-100/60 transition-colors">
                     <Td className="sticky left-0 bg-white hover:bg-canvas-100/60 z-10">
                       <NavLink to="/prices" className="group flex items-center gap-3">
@@ -301,6 +341,8 @@ export default function Comparison() {
                       )
                     })}
                   </tr>
+                    ))}
+                  </React.Fragment>
                 ))}
               </tbody>
             </table>

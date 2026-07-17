@@ -5,7 +5,7 @@ import {
 } from 'recharts'
 import {
   LineChart as LineIcon, TrendingUp, TrendingDown, Activity,
-  ArrowUpRight, ArrowDownRight, Minus, ExternalLink,
+  ArrowUpRight, ArrowDownRight, Minus, ExternalLink, Package,
 } from 'lucide-react'
 import { NavLink } from 'react-router-dom'
 import { supabase } from '../supabaseClient'
@@ -220,17 +220,21 @@ export default function PriceTrends() {
           <div className="mb-6 p-6 rounded-2xl bg-gradient-to-br from-ink-900 via-ink-900 to-ink-800 text-white relative overflow-hidden">
             <div className="absolute inset-0 opacity-30 bg-grain pointer-events-none" />
             <div className="relative flex items-start justify-between gap-6 flex-wrap">
-              <div>
-                <div className="text-[10px] uppercase tracking-[0.2em] text-brand-400 font-semibold mb-2">
-                  {catById[selectedProduct?.category_id]?.name || 'Product'}
-                </div>
-                <h2 className="font-display text-[28px] leading-tight tracking-tightest text-white">
-                  {selectedProduct?.name}
-                </h2>
-                <div className="text-[12px] text-ink-400 mt-1 font-mono tabular-nums flex items-center gap-3 flex-wrap">
-                  <span>SKU {selectedProduct?.sku}</span>
-                  {selectedProduct?.brand && <span>· {selectedProduct.brand}</span>}
-                  <span>· {pricedCompetitors.length} of {linkedCps.length} competitor{linkedCps.length === 1 ? '' : 's'} priced</span>
+              <div className="flex items-start gap-4 min-w-0">
+                {/* Product image — with fallback icon */}
+                <HeroImage src={selectedProduct?.image_url} name={selectedProduct?.name} />
+                <div className="min-w-0">
+                  <div className="text-[10px] uppercase tracking-[0.2em] text-brand-400 font-semibold mb-2">
+                    {catById[selectedProduct?.category_id]?.name || 'Product'}
+                  </div>
+                  <h2 className="font-display text-[28px] leading-tight tracking-tightest text-white">
+                    {selectedProduct?.name}
+                  </h2>
+                  <div className="text-[12px] text-ink-400 mt-1 font-mono tabular-nums flex items-center gap-3 flex-wrap">
+                    <span>SKU {selectedProduct?.sku}</span>
+                    {selectedProduct?.brand && <span>· {selectedProduct.brand}</span>}
+                    <span>· {pricedCompetitors.length} of {linkedCps.length} competitor{linkedCps.length === 1 ? '' : 's'} priced</span>
+                  </div>
                 </div>
               </div>
               <div className="text-right">
@@ -521,4 +525,24 @@ function Th({ children, className = '' }) {
 }
 function Td({ children, className = '' }) {
   return <td className={`px-5 py-3.5 text-sm text-ink-800 ${className}`}>{children}</td>
+}
+
+function HeroImage({ src, name }) {
+  const [failed, setFailed] = useState(false)
+  if (!src || failed) {
+    return (
+      <div className="w-24 h-24 rounded-xl bg-ink-800 border border-ink-700 flex items-center justify-center text-ink-500 flex-shrink-0">
+        <Package size={30} strokeWidth={1.5} />
+      </div>
+    )
+  }
+  return (
+    <img
+      src={src}
+      alt={name || ''}
+      loading="lazy"
+      onError={() => setFailed(true)}
+      className="w-24 h-24 rounded-xl object-cover border border-ink-700 bg-white flex-shrink-0"
+    />
+  )
 }
