@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import {
   Play, RefreshCw, CheckCircle2, Clock, XCircle, ExternalLink,
-  Zap, Activity, Loader2, ChevronRight, Code,
+  Zap, Activity, Loader2, ChevronRight, Code, Shield, Info,
 } from 'lucide-react'
 import { supabase } from '../supabaseClient'
 import { useTable } from '../lib/db'
@@ -9,6 +9,7 @@ import { useAuth } from '../lib/auth'
 import {
   PageHeader, Card, Button, Modal, Empty, LoadingBlock, ErrorBlock, Badge,
 } from '../components/UI'
+import TriggerTickButton from '../components/TriggerTickButton'
 
 export default function Scrapers() {
   const { isManager, user } = useAuth()
@@ -89,6 +90,7 @@ export default function Scrapers() {
         kicker="Automation"
         title="Scrapers"
         subtitle="Trigger manual scrape runs. A background worker in GitHub Actions polls the queue every 5 minutes and hits each competitor URL via Playwright."
+        action={isManager && <TriggerTickButton />}
       />
 
       {/* Worker health strip */}
@@ -243,7 +245,63 @@ export default function Scrapers() {
         competitor={runs.find(r => r.id === openRunId) ? compById[runs.find(r => r.id === openRunId).competitor_id] : null}
         onClose={() => setOpenRunId(null)}
       />
+
+      {isManager && <ProxySetupCard />}
     </div>
+  )
+}
+
+/* ── ScraperAPI / residential-proxy setup card ─────────── */
+function ProxySetupCard() {
+  return (
+    <Card className="mt-6 overflow-hidden">
+      <div className="px-6 py-4 border-b border-ink-100 flex items-baseline justify-between">
+        <div>
+          <div className="text-[10px] uppercase tracking-[0.14em] font-semibold text-brand-700">Optional</div>
+          <h3 className="font-display text-[18px] tracking-tight text-ink-900 mt-1 inline-flex items-center gap-2">
+            <Shield size={16} className="text-brand-600"/> Enable residential proxies (bypass anti-bot)
+          </h3>
+        </div>
+        <span className="text-[11px] text-ink-500">~$50/mo</span>
+      </div>
+      <div className="px-6 py-5 text-[13px] text-ink-700 space-y-4">
+        <p>
+          Current scrapes run from GitHub Actions datacenter IPs. Sites like Xcite/BAY are lenient today, but at scale
+          (1500+ SKUs per site) they may start blocking. ScraperAPI routes every request through a residential-IP pool
+          — indistinguishable from real users on home broadband.
+        </p>
+
+        <div className="p-4 rounded-xl bg-canvas-100 border border-ink-100">
+          <div className="text-[10px] uppercase tracking-[0.14em] font-semibold text-ink-600 mb-2">Setup — one time</div>
+          <ol className="pl-4 list-decimal space-y-2 text-[12.5px]">
+            <li>
+              Sign up at <a href="https://www.scraperapi.com" target="_blank" rel="noopener noreferrer"
+                className="text-brand-700 hover:underline inline-flex items-center gap-1 font-medium">
+                scraperapi.com <ExternalLink size={11}/>
+              </a> (starter plan is $49/mo for 100K requests; free trial for testing)
+            </li>
+            <li>Copy your API key from the dashboard</li>
+            <li>Format as a proxy URL: <code className="text-[11px] bg-white px-1.5 py-0.5 rounded border border-ink-200">http://scraperapi:YOUR_KEY@proxy-server.scraperapi.com:8001</code></li>
+            <li>
+              Add as a GitHub secret named <code className="text-[11px] bg-white px-1.5 py-0.5 rounded border border-ink-200">HTTP_PROXY</code> at
+              <a href="https://github.com/utcebs/Pricing-competitor-app/settings/secrets/actions" target="_blank" rel="noopener noreferrer"
+                className="text-brand-700 hover:underline inline-flex items-center gap-1 font-medium ml-1">
+                repo → Settings → Secrets → Actions <ExternalLink size={11}/>
+              </a>
+            </li>
+            <li>Next scrape tick — worker automatically routes through the proxy. Zero code changes needed.</li>
+          </ol>
+        </div>
+
+        <div className="text-[11.5px] text-ink-500 inline-flex items-start gap-2">
+          <Info size={12} className="text-ink-400 flex-shrink-0 mt-0.5"/>
+          <span>
+            The worker already supports the <code className="text-[10.5px] bg-ink-100 px-1 rounded">HTTP_PROXY</code> env var.
+            Only sign up + add the secret. When you don't have a proxy configured, scrapes run direct from GH Actions IPs (current state).
+          </span>
+        </div>
+      </div>
+    </Card>
   )
 }
 

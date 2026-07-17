@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
-import { Plus, Pencil, Trash2, Bell, Mail, AlertCircle } from 'lucide-react'
+import { Plus, Pencil, Trash2, Bell, Mail, AlertCircle, ExternalLink, Info } from 'lucide-react'
 import { useTable, saveRow, deleteRow } from '../lib/db'
 import { useAuth } from '../lib/auth'
 import {
@@ -144,7 +144,76 @@ export default function Alerts() {
         message={`Delete "${toDelete?.name}"?`}
         onConfirm={async () => { await deleteRow('alert_rules', toDelete.id); setToDelete(null); refresh() }}
       />
+
+      <EmailSetupCard />
     </div>
+  )
+}
+
+/* ── Email delivery setup card ────────────────────────────── */
+function EmailSetupCard() {
+  return (
+    <Card className="mt-6 overflow-hidden">
+      <div className="px-6 py-4 border-b border-ink-100 flex items-baseline justify-between">
+        <div>
+          <div className="text-[10px] uppercase tracking-[0.14em] font-semibold text-brand-700">Required</div>
+          <h3 className="font-display text-[18px] tracking-tight text-ink-900 mt-1 inline-flex items-center gap-2">
+            <Mail size={16} className="text-brand-600"/> Enable email delivery
+          </h3>
+        </div>
+        <span className="text-[11px] text-ink-500">Free tier available</span>
+      </div>
+      <div className="px-6 py-5 text-[13px] text-ink-700 space-y-4">
+        <p>
+          Alert rules are evaluated every 5 min by the worker. When one fires, an <code className="text-[11.5px] bg-ink-100 px-1 rounded">alert_deliveries</code> row is written.
+          Actual email delivery requires <strong>Resend</strong> — a modern, cheap email API. Without it, alerts are logged in the DB but never emailed.
+        </p>
+
+        <div className="p-4 rounded-xl bg-canvas-100 border border-ink-100">
+          <div className="text-[10px] uppercase tracking-[0.14em] font-semibold text-ink-600 mb-2">Setup — one time</div>
+          <ol className="pl-4 list-decimal space-y-2 text-[12.5px]">
+            <li>
+              Sign up at <a href="https://resend.com" target="_blank" rel="noopener noreferrer"
+                className="text-brand-700 hover:underline inline-flex items-center gap-1 font-medium">
+                resend.com <ExternalLink size={11}/>
+              </a> (free tier: 3,000 emails/mo, no credit card)
+            </li>
+            <li>
+              <strong>Add a domain</strong> (or use the sandbox <code className="text-[11px] bg-white px-1 rounded border border-ink-200">onboarding@resend.dev</code> for testing).
+              Sandbox works instantly; a custom domain needs SPF/DKIM DNS records + a few hours to verify.
+            </li>
+            <li>
+              <strong>Create an API key</strong> — dashboard → API Keys → Create → name it "worker", select "Sending access", copy the <code className="text-[11px] bg-white px-1 rounded border border-ink-200">re_...</code> key
+            </li>
+            <li>
+              Add two GitHub secrets at
+              <a href="https://github.com/utcebs/Pricing-competitor-app/settings/secrets/actions" target="_blank" rel="noopener noreferrer"
+                className="text-brand-700 hover:underline inline-flex items-center gap-1 font-medium ml-1">
+                repo → Settings → Secrets → Actions <ExternalLink size={11}/>
+              </a>
+              <ul className="mt-1.5 pl-4 space-y-0.5 list-disc text-[12px]">
+                <li><code className="text-[11px] bg-white px-1 rounded border border-ink-200">RESEND_API_KEY</code> — the re_… key</li>
+                <li><code className="text-[11px] bg-white px-1 rounded border border-ink-200">ALERT_FROM</code> — e.g. <code className="text-[11px]">alerts@yourdomain.com</code> or <code className="text-[11px]">onboarding@resend.dev</code></li>
+              </ul>
+            </li>
+            <li>
+              Create an alert rule above → wait for the trigger to fire → email lands in the profile's registered email
+            </li>
+          </ol>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="text-[11.5px] text-ink-500 inline-flex items-start gap-2">
+            <Info size={12} className="text-ink-400 flex-shrink-0 mt-0.5"/>
+            <span><strong>Instant delivery</strong> — rules with <code className="text-[10.5px] bg-ink-100 px-1 rounded">delivery=instant</code> email the moment the trigger fires on the next tick (max 5 min after the price change is detected).</span>
+          </div>
+          <div className="text-[11.5px] text-ink-500 inline-flex items-start gap-2">
+            <Info size={12} className="text-ink-400 flex-shrink-0 mt-0.5"/>
+            <span><strong>Daily digest</strong> — rules with <code className="text-[10.5px] bg-ink-100 px-1 rounded">delivery=digest</code> batch into a single email sent at 09:00 UTC. Configured via the <code className="text-[10.5px] bg-ink-100 px-1 rounded">worker-daily.yml</code> cron.</span>
+          </div>
+        </div>
+      </div>
+    </Card>
   )
 }
 
