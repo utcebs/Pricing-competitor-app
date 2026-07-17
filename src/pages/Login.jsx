@@ -73,17 +73,16 @@ export default function Login() {
               Move on price before the market moves on you.
             </h2>
             <p className="text-[15px] text-ink-300 mt-6 leading-relaxed">
-              Live competitor tracking across 15 sites, rule-based repricing,
-              and Dynamics 365 sync — from one console.
+              Live competitor tracking and intelligent Analytics — all from a single console.
             </p>
 
             <div className="mt-10 space-y-4">
-              <FeatureRow icon={LineChart} title="Continuous scraping"
-                desc="Every 5 minutes. 1,500 SKUs across your competitor set." />
-              <FeatureRow icon={Zap} title="Rule-based repricing"
-                desc="Guardrails on margin, stock, and floor prices — before you push." />
-              <FeatureRow icon={ShieldCheck} title="Approval-gated sync"
-                desc="Every proposed price change reviewed before it hits your storefront." />
+              <FeatureRow icon={LineChart} title="Continuous competitor monitoring"
+                desc="Continuously monitors competitor pricing across your selected websites, ensuring you always have access to the latest market data without manual effort." />
+              <FeatureRow icon={ShieldCheck} title="Actionable market insights"
+                desc="Consolidates competitor pricing into a centralized dashboard, making it easy to compare prices, identify trends, and spot opportunities to stay competitive." />
+              <FeatureRow icon={Zap} title="Automated alerts and recommendations"
+                desc="Detects significant pricing changes and generates intelligent repricing recommendations based on your predefined business rules, enabling faster, more informed pricing decisions." />
             </div>
           </div>
 
