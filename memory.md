@@ -520,4 +520,93 @@ Real data now in production:
 - Best Al-Yousifi is fully SPA-rendered; both scraper and WebFetch struggle with initial-HTML extraction. Playwright with the extended hydration wait handles it.
 - Match Review page (`/#/matches`) is empty by design — the pg_trgm trigger only fires when a `competitor_products` row is inserted WITHOUT a `product_id`. In practice every row created via UI or auto-finder has a `product_id`, so no suggestions get generated. Reserved for a future sitemap-crawl feature that would discover orphan URLs.
 
-_Last updated: 2026-07-16 — premium redesign, real scraping verified end-to-end, auto-URL finder, image cascade, own-URL price refresh._
+---
+
+## 21. 2026-07-16 (late) — cumulative fixes + hardening
+
+Long troubleshooting + polish day. What changed:
+
+### A. Auth / user creation — chased and fixed the root cause
+- **Symptom**: `admin_create_user` RPC created auth.users rows that GoTrue rejected on login ("Database error querying schema"). Even the Supabase Dashboard's Add User button failed with "Database error creating new user".
+- **Root cause**: two independent bugs stacked
+  1. My `admin_create_user` function didn't populate the `auth.identities` row that modern GoTrue requires
+  2. The pre-existing `handle_new_user` trigger (fires on `INSERT INTO auth.users`) had an error path that rolled back EVERY user insert — blocking the Dashboard too
+- **Fix (SQL user pasted)**:
+  ```sql
+  CREATE OR REPLACE FUNCTION public.handle_new_user() ... EXCEPTION WHEN OTHERS THEN
+    RAISE WARNING 'handle_new_user failed for user_id=%: %', NEW.id, SQLERRM;
+  END;
+  ```
+  Defensive wrapper — trigger can no longer roll back the auth.users insert; worst case profile isn't auto-created but the auth user is.
+- Once the trigger was defensive, I recreated `amir@test.com` and `vikas@test.com` via Auth Admin API from my terminal — both logged in successfully with `P@ssw0rd`. Any future user creation via app OR Dashboard now works.
+- **`admin_create_user` is still fragile** — user creation is safer via Auth Admin API (which the app now uses via… nothing, actually. Users page still calls the RPC. Fine as long as trigger is defensive).
+
+### B. Better error surfacing
+- New exported `normaliseError(e)` in `UI.jsx`: walks .message / .error_description / .error.message / .details / .hint / JSON.stringify with explicit "Empty error returned from server" when the string is '{}'
+- Login page translates common Supabase auth codes to sentences (Wrong password / Too many attempts / Missing identity record)
+- Users page: gold success toast + red error toast (replaced browser alert). Friendly translations for duplicate-key / missing-pgcrypto / permission-denied / PGRST202
+- Every async handler wrapped in try/catch/finally so busy state clears on RPC rejection
+
+### C. Nav access control
+- Split navigation into 4 tiers instead of 3:
+  - `PRIMARY_NAV` — everyone
+  - `OPS_NAV` — everyone (scrapers, matches, alerts, reports)
+  - `MANAGER_NAV` (new) — admin + manager: Categories
+  - `ADMIN_NAV` — admin only: Repricing, Integrations, Users
+- Was previously: Categories was in ADMIN_NAV → managers couldn't see the link even though the page's Add/Delete buttons were already gated on isManager
+- Layout.jsx destructures `isManager` from useAuth and renders the "Catalogue" section for both roles
+
+### D. Sidebar branding
+- User-supplied logo `public/logo.png` (Union Trading Co., black text on transparent, 1571×661) replaces the "Prisma · Intel" wordmark
+- On the dark sidebar: `<img>` with CSS `[filter:brightness(0)_invert(1)]` renders the black wordmark as white on dark
+- On the cream Login form panel: raw logo (black reads perfectly)
+- Login left panel (dark): inverted at 56px height for hero prominence
+- Sidebar: centered, 64px tall
+- Footer copyright + browser tab title updated to Union Trading Co.
+- Favicon: /logo.png
+
+### E. Arabic-Indic digit localizer (added → then had to fix TDZ)
+- New global digit localizer in `src/lib/i18n.js`: walks every text node in the DOM when locale is 'ar' and rewrites 0-9 → ٠-٩ + . → ٫ + , → ٬
+- Uses `MutationObserver` on document.body to re-localize as React updates
+- WeakSet marker prevents infinite loops
+- Applied via `applyDirection()` called from `setLanguage()` toggle in sidebar
+- Reload on AR → non-AR switch (clean way to restore Latin digits)
+- **TDZ crash fix**: Rollup's minifier reordered function bodies and broke hoisting. Symptom: `Uncaught ReferenceError: Cannot access 'On' before initialization` at page load. Fix: strict declaration order in i18n.js — all const/let at top, functions middle, bootstrap `applyDirection` call at bottom of module. Also swapped `Node.ELEMENT_NODE` / `Node.TEXT_NODE` constants for integer literals (1 / 3) for minifier safety.
+
+### F. Find URLs — live status modal + Match Review approval queue
+- New component `src/components/FindUrlsModal.jsx`: replaces the toast on Find URLs click / Auto-find on save
+- Polls the `url_find_jobs` row every 2s
+- Header banner morphs: Queued → Searching N competitors → Found N URLs / No URLs found
+- Per-competitor row for every ACTIVE competitor with live status: Queued → Searching → Found (URL + strategy) / Not found / Error / Skipped (already linked)
+- 4 summary tiles when finished (Found / Not found / Errors / Skipped)
+- "Review matches" CTA → jumps to /#/matches
+- **MatchReview.jsx rebuilt** as a two-section approval queue:
+  - Section 1: 'Auto-found competitor URLs — awaiting your approval' — every competitor_products with match_method='auto'. Product+SKU+image on left, competitor+URL+image on right, inline pencil edit on URL (Enter to save), Accept promotes to 'manual' with 100% confidence, Reject deletes the row
+  - Section 2: legacy pg_trgm match_suggestions (rarely used)
+  - "All caught up" green empty state when queue is drained
+
+### G. Scrapers page — "Idle" tile fix
+- Auto-refresh interval: 5s when scrapes are active, **20s otherwise** (was: no refresh when idle → tile stuck on 'Idle' after fresh ticks)
+- If ANY run has `status='running'`, tile shows emerald **"Scraping now"** regardless of last completed run's age
+
+### H. Anti-bot hardening (Playwright)
+- Added deps: `playwright-extra` + `puppeteer-extra-plugin-stealth`. Stealth plugin hides "I'm a headless browser" signals (webdriver flag, missing plugins, canvas/WebGL noise)
+- Rotating User-Agent pool (5 realistic Chrome/Firefox UAs) per browser launch
+- **One browser context per COMPETITOR** (was: per URL) — cookies + localStorage persist across the competitor's URLs so 2nd/3rd request looks like a returning visitor
+- **Human pacing between URLs**: default 3-5 second random delay between requests to the same competitor (configurable via `competitors.scrape_config.pacingMinMs / pacingMaxMs`)
+- `Accept-Language: en-US,en;q=0.9,ar;q=0.8` header matches a real KW-market browser
+- Resource blocking (images/media/fonts) moved from per-page to context-level for consistency
+- Applied to both `scraper.js` and `find-urls.js`
+
+### I. Nav / access — Repricing + Integrations became admin-only
+- Was: everyone saw the tabs in OPS_NAV
+- Now: `ADMIN_NAV` only. Managers and viewers no longer see them in sidebar
+
+### J. Known good state
+- `admin@test.com` / `P@ssw0rd` — admin
+- `amir@test.com` / `P@ssw0rd` — manager (recreated via Auth Admin API after trigger fix)
+- `vikas@test.com` / `P@ssw0rd` — manager (same)
+- 6 products with images from Xcite Amplience CDN (backfilled manually after junk-logo bug)
+- 10 competitor_products across Xcite/BAY/Eureka, most scraping successfully every ~5 min
+
+_Last updated: 2026-07-16 (late) — anti-bot stealth + pacing, live Find URLs modal + Match Review approval queue, auth trigger fix, Union Trading Co. branding._

@@ -1,5 +1,30 @@
-import { chromium } from 'playwright'
+import { chromium as chromiumExtra } from 'playwright-extra'
+import StealthPlugin from 'puppeteer-extra-plugin-stealth'
 import { supabase } from './supabase.js'
+
+// Stealth: hides "I'm a headless browser" fingerprints (webdriver flag,
+// missing plugins, ChromeDriver-only APIs, canvas/WebGL noise, etc.)
+// Some evasions are Puppeteer-specific and are gracefully no-ops under
+// Playwright — the ~20 that DO apply cover most anti-bot checks.
+chromiumExtra.use(StealthPlugin())
+const chromium = chromiumExtra
+
+// Realistic User-Agent pool. Rotated per browser launch.
+const USER_AGENTS = [
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.234 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0',
+]
+function randomUA() { return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)] }
+
+// Randomised delay: base ± jitter. Defaults 3-5 seconds between requests
+// to the same competitor to look human. Configurable per-competitor via
+// scrape_config.pacingMinMs / pacingMaxMs.
+function humanDelay(minMs = 3000, maxMs = 5000) {
+  return minMs + Math.floor(Math.random() * (maxMs - minMs))
+}
 
 /**
  * runScrapeJob — process one scrape_runs row end-to-end.
@@ -83,32 +108,52 @@ export async function runScrapeJob(run) {
   const config = competitor?.scrape_config || {}
   const userPriceSel = (config.priceSelector || '').trim()
   const userStockSel = (config.stockSelector || '').trim()
+  // Per-competitor pacing config; defaults 3-5s between requests.
+  const pacingMinMs = Number(config.pacingMinMs) || 3000
+  const pacingMaxMs = Number(config.pacingMaxMs) || 5000
 
   const browser = await chromium.launch({
     headless: true,
     proxy: process.env.HTTP_PROXY ? { server: process.env.HTTP_PROXY } : undefined,
   })
 
+  // ONE browser context per competitor. Cookies + localStorage persist
+  // across URLs from the same site, so the second/third request looks
+  // like a returning visitor. Random UA per launch.
+  const ua = randomUA()
+  const ctx = await browser.newContext({
+    userAgent: ua,
+    viewport: { width: 1440, height: 900 },
+    locale: 'en-US',
+    // Match a real browser's Accept-Language for the region we're scraping
+    extraHTTPHeaders: {
+      'Accept-Language': 'en-US,en;q=0.9,ar;q=0.8',
+    },
+  })
+  // Block heavy resources ONCE for the whole context — faster + fewer signals
+  await ctx.route('**/*', route => {
+    const t = route.request().resourceType()
+    if (t === 'image' || t === 'media' || t === 'font') return route.abort()
+    return route.continue()
+  })
+
   let scraped = 0, failed = 0, notFound = 0
   const errors = []
 
-  for (const cp of (items || [])) {
+  for (let i = 0; i < (items || []).length; i++) {
+    const cp = items[i]
     const started = Date.now()
-    let ctx = null
-    try {
-      ctx = await browser.newContext({
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        viewport: { width: 1440, height: 900 },
-        locale: 'en-US',
-      })
-      const page = await ctx.newPage()
 
-      // Block heavy resources for speed
-      await page.route('**/*', route => {
-        const t = route.request().resourceType()
-        if (t === 'image' || t === 'media' || t === 'font') return route.abort()
-        return route.continue()
-      })
+    // Pace between requests to the same site — skip on the very first URL
+    if (i > 0) {
+      const delay = humanDelay(pacingMinMs, pacingMaxMs)
+      console.log(`[scraper] pacing ${delay}ms before next request`)
+      await new Promise(r => setTimeout(r, delay))
+    }
+
+    let page = null
+    try {
+      page = await ctx.newPage()
 
       await page.goto(cp.url, { waitUntil: 'domcontentloaded', timeout: 45_000 })
 
@@ -126,7 +171,7 @@ export async function runScrapeJob(run) {
       const inStock = await extractStock(page, userStockSel)
       const imageUrl = await extractImage(page, cp.url)
 
-      await ctx.close(); ctx = null
+      await page.close(); page = null
 
       if (price != null) {
         await supabase.from('price_history').insert({
@@ -181,7 +226,7 @@ export async function runScrapeJob(run) {
     } catch (e) {
       failed++
       errors.push(e.message)
-      if (ctx) await ctx.close().catch(() => {})
+      if (page) await page.close().catch(() => {})
       await supabase.from('scrape_jobs').insert({
         scrape_run_id: run.id,
         competitor_product_id: cp.id,
@@ -193,6 +238,7 @@ export async function runScrapeJob(run) {
     }
   }
 
+  await ctx.close().catch(() => {})
   await browser.close()
 
   await supabase.from('scrape_runs').update({

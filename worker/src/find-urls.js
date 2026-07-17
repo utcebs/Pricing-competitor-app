@@ -1,6 +1,11 @@
 // Auto-URL finder v2 - Playwright search + DDG fallback
-import { chromium } from 'playwright'
+import { chromium } from 'playwright-extra'
+import StealthPlugin from 'puppeteer-extra-plugin-stealth'
 import { supabase } from './supabase.js'
+
+// URL finder benefits from stealth too — search-engine bots get blocked
+// aggressively, and Playwright + stealth passes most anti-bot checks.
+chromium.use(StealthPlugin())
 
 /**
  * runFindUrlsJob — process one url_find_jobs row end-to-end.
