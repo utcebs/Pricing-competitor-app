@@ -81,6 +81,44 @@ export default function Scrapers() {
     refresh()
   }
 
+  const [scrapeNewBusy, setScrapeNewBusy] = useState(false)
+  const scrapeNewOnly = async () => {
+    setScrapeNewBusy(true); setMsg('')
+    try {
+      // Fetch competitor_products that have NEVER been scraped.
+      // last_seen_at is null OR not present in price_history — the
+      // easier check is last_seen_at IS NULL (bumped on every scrape).
+      const { data: unscraped, error: qErr } = await supabase
+        .from('competitor_products')
+        .select('id, competitor_id')
+        .is('last_seen_at', null)
+        .eq('is_active', true)
+      if (qErr) throw qErr
+      if (!unscraped || unscraped.length === 0) {
+        setMsg('Nothing new — every active competitor URL has been scraped at least once.')
+        setTimeout(() => setMsg(''), 6000)
+        return
+      }
+      // Group by competitor — queue one scrape_run per affected competitor.
+      const uniqueCompIds = [...new Set(unscraped.map(x => x.competitor_id))]
+      const rows = uniqueCompIds.map(cid => ({
+        competitor_id: cid,
+        status: 'queued',
+        triggered_by: user?.id,
+        triggered_kind: 'manual',
+      }))
+      const { error: insErr } = await supabase.from('scrape_runs').insert(rows)
+      if (insErr) throw insErr
+      setMsg(`Queued ${rows.length} competitor scrape${rows.length === 1 ? '' : 's'} for ${unscraped.length} new URL${unscraped.length === 1 ? '' : 's'}. Next tick picks them up.`)
+      refresh()
+    } catch (e) {
+      setMsg('Failed: ' + (e.message || 'unknown'))
+    } finally {
+      setScrapeNewBusy(false)
+      setTimeout(() => setMsg(''), 10_000)
+    }
+  }
+
   const compById = Object.fromEntries(competitors.map(c => [c.id, c]))
   const workerHealth = getWorkerHealth(runs)
 
@@ -90,7 +128,15 @@ export default function Scrapers() {
         kicker="Automation"
         title="Scrapers"
         subtitle="Trigger manual scrape runs. A background worker in GitHub Actions polls the queue every 5 minutes and hits each competitor URL via Playwright."
-        action={isManager && <TriggerTickButton />}
+        action={isManager && (
+          <div className="flex items-center gap-2 flex-wrap">
+            <Button variant="secondary" onClick={scrapeNewOnly} busy={scrapeNewBusy}
+              title="Queue scrapes only for competitors that have URLs which have never been scraped">
+              <Sparkles size={14} /> Scrape new items
+            </Button>
+            <TriggerTickButton />
+          </div>
+        )}
       />
 
       {/* Worker health strip */}
