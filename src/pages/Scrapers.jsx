@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react'
 import {
   Play, RefreshCw, CheckCircle2, Clock, XCircle, ExternalLink,
   Zap, Activity, Loader2, ChevronRight, Code, Shield, Info,
+  Sparkles,
 } from 'lucide-react'
 import { supabase } from '../supabaseClient'
 import { useTable } from '../lib/db'
