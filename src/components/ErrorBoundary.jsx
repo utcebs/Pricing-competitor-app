@@ -2,6 +2,26 @@ import { Component } from 'react'
 import { AlertTriangle, RefreshCw, Home } from 'lucide-react'
 
 /**
+ * Detect the "stale chunk after redeploy" error class. Vite emits chunks
+ * with content-hashed names (Comparison-DTZSQIrB.js). After a redeploy the
+ * hash changes; a browser holding the old index.js requests a chunk that
+ * no longer exists on the server → dynamic import throws.
+ */
+function isStaleChunkError(err) {
+  if (!err) return false
+  const msg = String(err?.message || err || '')
+  return (
+    /Failed to fetch dynamically imported module/i.test(msg) ||
+    /Importing a module script failed/i.test(msg) ||
+    /error loading dynamically imported module/i.test(msg) ||
+    /ChunkLoadError/i.test(msg) ||
+    err?.name === 'ChunkLoadError'
+  )
+}
+
+const RELOAD_SENTINEL = 'pca:stale-chunk-reloaded'
+
+/**
  * Catches runtime errors in the React tree and renders a recovery UI
  * instead of an unstyled white screen. Every uncaught render / lifecycle
  * error routes here.
@@ -22,10 +42,33 @@ export default class ErrorBoundary extends Component {
   }
 
   componentDidCatch(error, info) {
-    // Log to console so users can share the stack when reporting.
-    // Not a great place for real error tracking — swap in Sentry etc. later.
     console.error('[ErrorBoundary] caught:', error, info)
     this.setState({ info })
+
+    if (isStaleChunkError(error)) {
+      try {
+        const already = sessionStorage.getItem(RELOAD_SENTINEL)
+        if (!already) {
+          sessionStorage.setItem(RELOAD_SENTINEL, String(Date.now()))
+          // Give React a tick to commit the error UI so users see a brief
+          // "reloading…" flash rather than a jarring blank blip.
+          setTimeout(() => window.location.reload(), 100)
+        }
+      } catch {
+        // sessionStorage blocked (Safari private / iframe) — just reload once.
+        setTimeout(() => window.location.reload(), 100)
+      }
+    }
+  }
+
+  componentDidMount() {
+    // Clear the sentinel once we've successfully rendered the tree after a
+    // reload — future stale-chunk errors get one auto-recovery again.
+    try {
+      if (sessionStorage.getItem(RELOAD_SENTINEL)) {
+        sessionStorage.removeItem(RELOAD_SENTINEL)
+      }
+    } catch { /* ignore */ }
   }
 
   reset = () => {
@@ -45,6 +88,23 @@ export default class ErrorBoundary extends Component {
     if (!this.state.hasError) return this.props.children
 
     const msg = this.state.error?.message || String(this.state.error) || 'Unknown error'
+    const staleChunk = isStaleChunkError(this.state.error)
+
+    if (staleChunk) {
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-canvas-50 p-8">
+          <div className="max-w-md w-full bg-white rounded-2xl border border-ink-100 shadow-card-xl p-7 text-center">
+            <div className="w-12 h-12 rounded-full bg-brand-100 text-brand-700 flex items-center justify-center mx-auto mb-4">
+              <RefreshCw size={20} className="animate-spin" />
+            </div>
+            <div className="font-display text-[20px] tracking-tight text-ink-900">Updating to the latest version…</div>
+            <div className="text-[12.5px] text-ink-500 mt-2">
+              A new build was deployed. Reloading now to pick it up.
+            </div>
+          </div>
+        </div>
+      )
+    }
     return (
       <div className="min-h-screen flex items-center justify-center bg-canvas-50 p-8">
         <div className="max-w-lg w-full bg-white rounded-2xl border border-red-100 shadow-card-xl overflow-hidden">
