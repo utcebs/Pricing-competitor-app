@@ -609,4 +609,64 @@ Long troubleshooting + polish day. What changed:
 - 6 products with images from Xcite Amplience CDN (backfilled manually after junk-logo bug)
 - 10 competitor_products across Xcite/BAY/Eureka, most scraping successfully every ~5 min
 
-_Last updated: 2026-07-16 (late) — anti-bot stealth + pacing, live Find URLs modal + Match Review approval queue, auth trigger fix, Union Trading Co. branding._
+---
+
+## 22. 2026-07-17 — pre-release hardening
+
+Wrapped up a scale-out + robustness push before end-user release.
+
+### Structural changes worth remembering
+
+- **`src/lib/routes.js`** — new file. Central map `path → () => import('./pages/X')`. Both `App.jsx` (React.lazy) and `Layout.jsx` (hover prefetch) reference this map so Vite dedupes to one chunk per page.
+- **`src/components/ErrorBoundary.jsx`** — new. Class component with `getDerivedStateFromError` + `componentDidCatch`. Renders a recovery card (Go to dashboard / Reload) instead of a white screen. Wrapped around `<AuthProvider>` in `App.jsx` (outer) AND `<Outlet />` in `Layout.jsx` (inner, keyed on `window.location.hash` so per-page crashes reset on navigation).
+- **`src/components/TriggerTickButton.jsx`** — new. Bottom-right admin button that fires the worker-tick workflow via GitHub's `POST /actions/workflows/worker-tick.yml/dispatches`. Requires a fine-grained PAT stored in `localStorage.gh_pat_worker_tick` (per browser, never sent to Supabase). All localStorage access wrapped in try/catch for Safari-private-mode safety.
+- **`src/components/FindUrlsModal.jsx`** — polls `url_find_jobs` via Supabase Realtime (`postgres_changes` on UPDATE filter `id=eq.{jobId}`) with a 10s safety-net poll fallback.
+- **`src/components/ScrapeStatusPill.jsx`** — same pattern; subscribes to `scrape_runs` changes with a 30s safety-net poll.
+- **`worker/src/scraper.js`** — refactored to run URLs in **batches of `concurrency` (default 5)** using Promise.all inside the shared context. Extracted per-URL work into `processOneUrl()` helper. Row-level locking via `.update(...).eq('id', run.id).eq('status', 'queued')` prevents shard collisions.
+- **`worker/src/find-urls.js`** — v3: brand-aware query, 5 candidates per competitor, Jaccard token similarity scoring against og:title, threshold 0.35. Rejects below threshold instead of returning a wrong URL.
+- **`worker/src/tick.js`** — reads `SHARD_INDEX` / `SHARD_COUNT` env vars, filters queued runs by modulo in JS. Backward-compatible (no env → single-worker mode).
+- **`.github/workflows/worker-tick*.yml`** — 3 shard workflows (0, 1, 2), each with independent concurrency group + its own SHARD_INDEX env. Combined with parallel scraping: theoretical 15-30× throughput.
+- **`worker/src/daily-digest.js`** — now calls `prune_old_data()` RPC after sending digests. Skips gracefully if the SQL migration isn't applied.
+
+### New nav structure (users see this)
+
+```
+INSIGHTS      Dashboard · Comparison · Price Trends · Reports · Match Review
+CATALOGUE     Products · Competitors · Linked Items · Log a Price · Categories (manager+admin)
+AUTOMATION    Scrapers · Alerts
+ADMIN         Repricing · Integrations · Users (admin only)
+```
+
+### Migrations applied (canonical list, in order)
+
+1. `supabase/schema.sql` (initial Phase 1)
+2. `supabase/migrations/phase-2-5.sql`
+3. `supabase/migrations/admin-user-mgmt.sql` (recreated inline several times with fixes)
+4. `supabase/migrations/url-finder.sql`
+5. `ALTER TABLE products ADD COLUMN own_url TEXT` (inline)
+6. Trigger fix (defensive `handle_new_user` — wrapped in EXCEPTION WHEN OTHERS)
+7. Auth identity backfill for broken users (inline; one-shot cleanup)
+8. `supabase/migrations/data-cleanup.sql` (prune_old_data function)
+9. `supabase/migrations/phase1-perf.sql` (indexes + Realtime publication)
+
+### Pre-release audit results (2026-07-17)
+
+**All green:**
+- Live deploy: `0c502ba`, HTTP 200
+- All 3 users can log in (admin, amir, vikas — all `P@ssw0rd`) — amir/vikas had drifted and were reset via Auth Admin API
+- All SECURITY DEFINER RPCs exist (admin_create_user / admin_delete_user / admin_reset_password / prune_old_data / is_admin_or_manager)
+- RLS enforced: anon reads return `[]` on all 5 tested tables
+- Zero orphan competitor_products
+- All 8 products have image_url set
+- All 8 products have current_price set
+- Latest worker ticks succeeded (last: `2026-07-17T16:23`)
+
+**Follow-ups from audit (fixed in this push):**
+- Added ErrorBoundary (was: page crash → white screen)
+- Wrapped `TriggerTickButton` localStorage in try/catch (was: throws in Safari private mode)
+
+**Followups NOT fixed:**
+- Eureka scraper occasionally reports "4 URLs had no matching price selector" — its Angular SPA behaves inconsistently. Non-blocking; those URLs just don't get prices that tick.
+- Match Review section 2 (pg_trgm suggestions) is always empty because auto-URL-finder always sets product_id on insert. Left in for future orphan-URL discovery workflows.
+
+_Last updated: 2026-07-17 — parallel scraper, shard workflows, DB indexes, Realtime, route prefetch, ErrorBoundary, brand-aware URL finder._

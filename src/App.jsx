@@ -3,6 +3,7 @@ import { Routes, Route } from 'react-router-dom'
 import { AuthProvider } from './lib/auth'
 import Layout from './components/Layout'
 import Login from './pages/Login'
+import ErrorBoundary from './components/ErrorBoundary'
 import { PAGE_IMPORTS } from './lib/routes'
 
 // Lazy-loaded pages — cuts the initial bundle by ~60%.
@@ -26,27 +27,29 @@ const Integrations       = lazy(PAGE_IMPORTS['/integrations'])
 
 export default function App() {
   return (
-    <AuthProvider>
-      <Routes>
-        <Route path="/login" element={<Login />} />
-        <Route element={<Layout />}>
-          <Route path="/"                    element={<Dashboard />} />
-          <Route path="/products"            element={<Products />} />
-          <Route path="/competitors"         element={<Competitors />} />
-          <Route path="/competitor-products" element={<CompetitorProducts />} />
-          <Route path="/prices"              element={<PriceTrends />} />
-          <Route path="/prices/new"          element={<PriceEntry />} />
-          <Route path="/comparison"          element={<Comparison />} />
-          <Route path="/scrapers"            element={<Scrapers />} />
-          <Route path="/matches"             element={<MatchReview />} />
-          <Route path="/alerts"              element={<Alerts />} />
-          <Route path="/reports"             element={<Reports />} />
-          <Route path="/repricing"           element={<Repricing />} />
-          <Route path="/integrations"        element={<Integrations />} />
-          <Route path="/categories"          element={<Categories />} />
-          <Route path="/users"               element={<Users />} />
-        </Route>
-      </Routes>
-    </AuthProvider>
+    <ErrorBoundary>
+      <AuthProvider>
+        <Routes>
+          <Route path="/login" element={<Login />} />
+          <Route element={<Layout />}>
+            <Route path="/"                    element={<Dashboard />} />
+            <Route path="/products"            element={<Products />} />
+            <Route path="/competitors"         element={<Competitors />} />
+            <Route path="/competitor-products" element={<CompetitorProducts />} />
+            <Route path="/prices"              element={<PriceTrends />} />
+            <Route path="/prices/new"          element={<PriceEntry />} />
+            <Route path="/comparison"          element={<Comparison />} />
+            <Route path="/scrapers"            element={<Scrapers />} />
+            <Route path="/matches"             element={<MatchReview />} />
+            <Route path="/alerts"              element={<Alerts />} />
+            <Route path="/reports"             element={<Reports />} />
+            <Route path="/repricing"           element={<Repricing />} />
+            <Route path="/integrations"        element={<Integrations />} />
+            <Route path="/categories"          element={<Categories />} />
+            <Route path="/users"               element={<Users />} />
+          </Route>
+        </Routes>
+      </AuthProvider>
+    </ErrorBoundary>
   )
 }

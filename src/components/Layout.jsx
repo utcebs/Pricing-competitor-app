@@ -10,6 +10,7 @@ import { useAuth } from '../lib/auth'
 import { setLanguage } from '../lib/i18n'
 import { useTranslation } from 'react-i18next'
 import ScrapeStatusPill from './ScrapeStatusPill'
+import ErrorBoundary from './ErrorBoundary'
 import { prefetchRoute } from '../lib/routes'
 
 // Analytics / read-only views — Dashboard first, then the comparison
@@ -146,10 +147,14 @@ export default function Layout() {
       <main className="flex-1 overflow-y-auto relative">
         <div className="max-w-[1240px] mx-auto px-8 lg:px-12 py-10">
           {/* Suspense INSIDE the layout — sidebar stays put while the page chunk loads.
-              Fallback matches the canvas colour so there's no white flash mid-navigation. */}
-          <Suspense fallback={<PageFallback />}>
-            <Outlet />
-          </Suspense>
+              Fallback matches the canvas colour so there's no white flash mid-navigation.
+              ErrorBoundary keyed on pathname so a page crash resets when the user
+              navigates away, and the sidebar/pill stay usable. */}
+          <ErrorBoundary key={window.location.hash}>
+            <Suspense fallback={<PageFallback />}>
+              <Outlet />
+            </Suspense>
+          </ErrorBoundary>
         </div>
         <ScrapeStatusPill />
       </main>

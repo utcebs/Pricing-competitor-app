@@ -22,7 +22,8 @@ export default function TriggerTickButton() {
   const [setupOpen, setSetupOpen] = useState(false)
 
   const trigger = async () => {
-    const token = localStorage.getItem(LS_KEY)
+    let token = null
+    try { token = localStorage.getItem(LS_KEY) } catch { /* Safari private mode etc. */ }
     if (!token) { setSetupOpen(true); return }
     setBusy(true); setMsg(null)
     try {
@@ -43,7 +44,7 @@ export default function TriggerTickButton() {
         setMsg({ kind: 'success', text: 'Tick fired. Worker starts in ~10 seconds.' })
       } else if (res.status === 401 || res.status === 403) {
         setMsg({ kind: 'error', text: 'Token rejected — regenerate it with Actions: write permission.' })
-        localStorage.removeItem(LS_KEY)
+        try { localStorage.removeItem(LS_KEY) } catch { /* ignore */ }
       } else if (res.status === 404) {
         setMsg({ kind: 'error', text: `Workflow not found. Check ${OWNER}/${REPO} and workflow name.` })
       } else {
@@ -88,7 +89,8 @@ function SetupModal({ open, onClose, onSaved }) {
       localStorage.setItem(LS_KEY, token.trim())
       onSaved?.()
     } catch (e) {
-      alert('Could not save token: ' + e.message)
+      // Safari private mode, storage quota, or CSP block
+      alert('Could not save token: ' + (e?.message || 'localStorage blocked in this browser'))
     }
   }
   return (
