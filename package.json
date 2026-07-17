@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",
+    "@tanstack/react-virtual": "^3.14.6",
     "i18next": "^23.16.0",
     "jspdf": "^2.5.2",
     "jspdf-autotable": "^3.8.4",

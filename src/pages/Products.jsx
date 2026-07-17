@@ -60,6 +60,14 @@ export default function Products() {
     })
   }, [products, q, catFilter, brandFilter, trackingFilter, linkCounts])
 
+  // Perf guard — DOM chokes past ~500 rows of a rich table with images.
+  // Cap render and prompt filtering. (True virtualization is a follow-up
+  // when it becomes needed; capping handles the free-tier / early-scale
+  // path without introducing table-layout complexity.)
+  const RENDER_CAP = 300
+  const capped = filtered.length > RENDER_CAP
+  const visibleRows = capped ? filtered.slice(0, RENDER_CAP) : filtered
+
   const findUrlsFor = async (product) => {
     setFindingId(product.id); setToast('')
     const { data, error } = await supabase.from('url_find_jobs').insert({
@@ -137,13 +145,18 @@ export default function Products() {
       {/* Result count strip when filters active */}
       {(q || catFilter !== 'all' || brandFilter !== 'all' || trackingFilter !== 'all') && (
         <div className="text-[11.5px] text-ink-500 mb-3">
-          Showing <span className="font-semibold text-ink-800">{filtered.length}</span> of {products.length} products
-          {(q || catFilter !== 'all' || brandFilter !== 'all' || trackingFilter !== 'all') && (
-            <button onClick={() => { setQ(''); setCatFilter('all'); setBrandFilter('all'); setTrackingFilter('all') }}
-              className="ml-3 text-brand-700 hover:underline font-medium">
-              Clear filters
-            </button>
-          )}
+          Showing <span className="font-semibold text-ink-800">{visibleRows.length}</span>
+          {capped && ` of ${filtered.length} matching`}
+          {!capped && filtered.length !== products.length && ` of ${products.length}`} products
+          <button onClick={() => { setQ(''); setCatFilter('all'); setBrandFilter('all'); setTrackingFilter('all') }}
+            className="ml-3 text-brand-700 hover:underline font-medium">
+            Clear filters
+          </button>
+        </div>
+      )}
+      {capped && (
+        <div className="mb-3 text-[11.5px] px-3 py-2 bg-amber-50 border border-amber-100 rounded-lg text-amber-800 inline-flex items-center gap-2">
+          Showing first {RENDER_CAP} rows of {filtered.length}. Filter above to narrow down.
         </div>
       )}
 
@@ -178,7 +191,7 @@ export default function Products() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-ink-100">
-                {filtered.map(p => {
+                {visibleRows.map(p => {
                   const image = p.image_url || cps.find(c => c.product_id === p.id && c.image_url)?.image_url || null
                   return (
                   <tr key={p.id} className="hover:bg-canvas-100">

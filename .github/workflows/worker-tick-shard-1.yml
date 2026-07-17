@@ -1,39 +1,20 @@
-name: Worker · Tick shard 0 (every 5 min)
+name: Worker · Tick shard 1 (every 5 min)
 
-# Sharded worker — this file is shard 0 of 3. Two sibling workflows
-# (worker-tick-shard-1.yml, worker-tick-shard-2.yml) handle shards 1 and 2.
-# Each shard fetches queued scrape_runs, filters by
-# (competitor_id % SHARD_COUNT) === SHARD_INDEX, processes up to 5 runs.
-# Row-level locking in runScrapeJob prevents cross-shard collisions.
-#
-# Effect: 3 competitors' scrapes can run truly in parallel across 3 GH
-# runners. Combined with per-competitor parallel URL scraping (5-10
-# concurrent pages), theoretical throughput vs old sequential design is
-# ~15-30×. Practical gain is 3-5× because GH throttles cron on public
-# repos and runner allocation isn't guaranteed.
-#
-# Playwright browsers are cached across runs so cold start is ~30s
-# instead of ~3 min.
-#
-# Public repo has unlimited Actions minutes, so cost is $0.
+# Shard 1 of 3 — processes queued scrape_runs where
+# (competitor_id % 3) === 1. See worker-tick.yml for architecture notes.
 
 on:
   schedule:
     - cron: '*/5 * * * *'
   workflow_dispatch:
-  # Kick a tick immediately when worker code or seed data changes.
-  # Also useful as a "force run now" without needing gh CLI.
   push:
     branches: [main]
     paths:
       - 'worker/**'
-      - '.github/workflows/worker-tick.yml'
+      - '.github/workflows/worker-tick-shard-1.yml'
 
-# Skip if a previous shard-0 tick is still running — prevents queue thrashing.
-# Note: the group name includes the shard index so shards 0/1/2 have
-# INDEPENDENT concurrency locks and can run truly in parallel.
 concurrency:
-  group: worker-tick-shard-0
+  group: worker-tick-shard-1
   cancel-in-progress: false
 
 jobs:
@@ -54,7 +35,6 @@ jobs:
         working-directory: worker
         run: npm ci
 
-      # Cache Playwright browsers between runs
       - name: Cache Playwright browsers
         id: playwright-cache
         uses: actions/cache@v4
@@ -72,7 +52,7 @@ jobs:
         working-directory: worker
         run: npx playwright install-deps chromium
 
-      - name: Run tick (shard 0/3)
+      - name: Run tick (shard 1/3)
         working-directory: worker
         env:
           SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
@@ -80,6 +60,6 @@ jobs:
           RESEND_API_KEY:            ${{ secrets.RESEND_API_KEY }}
           ALERT_FROM:                ${{ secrets.ALERT_FROM }}
           HTTP_PROXY:                ${{ secrets.HTTP_PROXY }}
-          SHARD_INDEX: '0'
+          SHARD_INDEX: '1'
           SHARD_COUNT: '3'
         run: node src/tick.js

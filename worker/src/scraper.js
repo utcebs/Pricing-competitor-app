@@ -19,11 +19,79 @@ const USER_AGENTS = [
 ]
 function randomUA() { return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)] }
 
-// Randomised delay: base ± jitter. Defaults 3-5 seconds between requests
-// to the same competitor to look human. Configurable per-competitor via
-// scrape_config.pacingMinMs / pacingMaxMs.
+// Randomised delay: base ± jitter. Defaults 3-5 seconds between batches
+// (was per-URL before parallelisation).
 function humanDelay(minMs = 3000, maxMs = 5000) {
   return minMs + Math.floor(Math.random() * (maxMs - minMs))
+}
+
+/**
+ * processOneUrl — extracted from the scrape loop so it can run
+ * concurrently under Promise.all(). Shares the browser context (cookies
+ * + storage) with sibling requests in the same batch.
+ */
+async function processOneUrl(cp, ctx, run, config, userPriceSel, userStockSel, counters) {
+  const started = Date.now()
+  let page = null
+  try {
+    page = await ctx.newPage()
+    await page.goto(cp.url, { waitUntil: 'domcontentloaded', timeout: 45_000 })
+    if (config.waitFor?.trim()) {
+      await page.waitForSelector(config.waitFor, { timeout: 10_000 }).catch(() => {})
+    } else {
+      await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => {})
+      await page.waitForTimeout(1500)
+    }
+    const { price, matchedSelector, htmlSample } = await extractPrice(page, userPriceSel)
+    const inStock = await extractStock(page, userStockSel)
+    const imageUrl = await extractImage(page, cp.url)
+    await page.close(); page = null
+
+    if (price != null) {
+      await supabase.from('price_history').insert({
+        competitor_product_id: cp.id, price,
+        currency_code: cp.currency_code || 'KWD',
+        source: 'scrape', scrape_run_id: run.id,
+      })
+    }
+    if (inStock !== null) {
+      await supabase.from('stock_history').insert({
+        competitor_product_id: cp.id, in_stock: inStock,
+        source: 'scrape', scrape_run_id: run.id,
+      })
+    }
+    const cpUpdate = { last_seen_at: new Date().toISOString() }
+    if (imageUrl) cpUpdate.image_url = imageUrl
+    await supabase.from('competitor_products').update(cpUpdate).eq('id', cp.id)
+    if (imageUrl && cp.product_id) {
+      await supabase.from('products')
+        .update({ image_url: imageUrl })
+        .eq('id', cp.product_id)
+        .is('image_url', null)
+    }
+    await supabase.from('scrape_jobs').insert({
+      scrape_run_id: run.id,
+      competitor_product_id: cp.id,
+      status: price != null ? 'ok' : 'not_found',
+      price_extracted: price,
+      in_stock_extracted: inStock,
+      raw_html_sample: htmlSample,
+      error_message: price == null ? `No price found. Tried: ${matchedSelector || 'all candidates'}` : null,
+      duration_ms: Date.now() - started,
+    })
+    if (price != null) { counters.scraped++; console.log(`[scraper] ✓ ${cp.name}: ${price} via ${matchedSelector}`) }
+    else { counters.notFound++; console.log(`[scraper] ✗ ${cp.name}: no price extracted`) }
+  } catch (e) {
+    counters.failed++
+    counters.errors.push(e.message)
+    if (page) await page.close().catch(() => {})
+    await supabase.from('scrape_jobs').insert({
+      scrape_run_id: run.id, competitor_product_id: cp.id,
+      status: 'error', error_message: e.message,
+      duration_ms: Date.now() - started,
+    })
+    console.log(`[scraper] ERROR ${cp.name}: ${e.message}`)
+  }
 }
 
 /**
@@ -93,11 +161,18 @@ const STOCK_CANDIDATES = [
 ]
 
 export async function runScrapeJob(run) {
-  console.log(`[scraper] starting run ${run.id} for competitor ${run.competitor_id}`)
-
-  await supabase.from('scrape_runs')
+  // Row-level lock: only claim if still queued. Prevents duplicate work
+  // when multiple shard workflows race for the same run.
+  const { data: claimed, error: claimErr } = await supabase.from('scrape_runs')
     .update({ status: 'running', started_at: new Date().toISOString() })
     .eq('id', run.id)
+    .eq('status', 'queued')
+    .select()
+  if (claimErr || !claimed || claimed.length === 0) {
+    console.log(`[scraper] run ${run.id} was already claimed by another worker — skipping`)
+    return
+  }
+  console.log(`[scraper] starting run ${run.id} for competitor ${run.competitor_id}`)
 
   const { data: competitor } = await supabase
     .from('competitors').select('*').eq('id', run.competitor_id).single()
@@ -137,109 +212,40 @@ export async function runScrapeJob(run) {
     return route.continue()
   })
 
-  let scraped = 0, failed = 0, notFound = 0
-  const errors = []
+  // Parallel scraping. Concurrency per-competitor from config, defaults to 5.
+  // Tune per-site — high-tolerance sites: 8-10; low-tolerance sites: 2-3.
+  const concurrency = Math.max(1, Math.min(10, Number(config.concurrency) || 5))
 
-  for (let i = 0; i < (items || []).length; i++) {
-    const cp = items[i]
-    const started = Date.now()
+  const counters = { scraped: 0, failed: 0, notFound: 0, errors: [] }
 
-    // Pace between requests to the same site — skip on the very first URL
-    if (i > 0) {
+  // Process URLs in batches of `concurrency`. Pacing gap sits BETWEEN
+  // batches, not between URLs within a batch (so 5 URLs go out in one
+  // burst, then 3-5s idle, then the next 5).
+  const batches = []
+  for (let i = 0; i < (items || []).length; i += concurrency) {
+    batches.push(items.slice(i, i + concurrency))
+  }
+
+  console.log(`[scraper] ${items?.length || 0} URLs → ${batches.length} batch(es) of up to ${concurrency}`)
+
+  for (let bi = 0; bi < batches.length; bi++) {
+    if (bi > 0) {
       const delay = humanDelay(pacingMinMs, pacingMaxMs)
-      console.log(`[scraper] pacing ${delay}ms before next request`)
+      console.log(`[scraper] batch ${bi} — pacing ${delay}ms before next burst`)
       await new Promise(r => setTimeout(r, delay))
     }
-
-    let page = null
-    try {
-      page = await ctx.newPage()
-
-      await page.goto(cp.url, { waitUntil: 'domcontentloaded', timeout: 45_000 })
-
-      if (config.waitFor?.trim()) {
-        await page.waitForSelector(config.waitFor, { timeout: 10_000 }).catch(() => {})
-      } else {
-        // Wait longer for JS-rendered prices to settle. Next.js/React
-        // sites need extra hydration time; 8s wasn't enough on Xcite TVs.
-        await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => {})
-        // Extra beat for post-hydration price fetches
-        await page.waitForTimeout(1500)
-      }
-
-      const { price, matchedSelector, htmlSample } = await extractPrice(page, userPriceSel)
-      const inStock = await extractStock(page, userStockSel)
-      const imageUrl = await extractImage(page, cp.url)
-
-      await page.close(); page = null
-
-      if (price != null) {
-        await supabase.from('price_history').insert({
-          competitor_product_id: cp.id,
-          price,
-          currency_code: cp.currency_code || 'KWD',
-          source: 'scrape',
-          scrape_run_id: run.id,
-        })
-      }
-      if (inStock !== null) {
-        await supabase.from('stock_history').insert({
-          competitor_product_id: cp.id,
-          in_stock: inStock,
-          source: 'scrape',
-          scrape_run_id: run.id,
-        })
-      }
-      // Update image_url only if we found one (respect existing image if scraper returns null)
-      const cpUpdate = { last_seen_at: new Date().toISOString() }
-      if (imageUrl) cpUpdate.image_url = imageUrl
-      await supabase.from('competitor_products').update(cpUpdate).eq('id', cp.id)
-
-      // Also promote to products.image_url if the product doesn't have one yet —
-      // first competitor scrape that finds an image wins. This way the product
-      // has a stable image even if that competitor link is later removed.
-      if (imageUrl && cp.product_id) {
-        await supabase.from('products')
-          .update({ image_url: imageUrl })
-          .eq('id', cp.product_id)
-          .is('image_url', null)
-      }
-
-      await supabase.from('scrape_jobs').insert({
-        scrape_run_id: run.id,
-        competitor_product_id: cp.id,
-        status: price != null ? 'ok' : 'not_found',
-        price_extracted: price,
-        in_stock_extracted: inStock,
-        raw_html_sample: htmlSample,          // ← always saved when nothing matched
-        error_message: price == null ? `No price found. Tried: ${matchedSelector || 'all candidates'}` : null,
-        duration_ms: Date.now() - started,
-      })
-
-      if (price != null) {
-        scraped++
-        console.log(`[scraper] ✓ ${cp.name}: ${price} via ${matchedSelector}`)
-      } else {
-        notFound++
-        console.log(`[scraper] ✗ ${cp.name}: no price extracted`)
-      }
-    } catch (e) {
-      failed++
-      errors.push(e.message)
-      if (page) await page.close().catch(() => {})
-      await supabase.from('scrape_jobs').insert({
-        scrape_run_id: run.id,
-        competitor_product_id: cp.id,
-        status: 'error',
-        error_message: e.message,
-        duration_ms: Date.now() - started,
-      })
-      console.log(`[scraper] ERROR ${cp.name}: ${e.message}`)
-    }
+    await Promise.all(batches[bi].map(cp =>
+      processOneUrl(cp, ctx, run, config, userPriceSel, userStockSel, counters)
+    ))
   }
 
   await ctx.close().catch(() => {})
   await browser.close()
+
+  const scraped = counters.scraped
+  const failed = counters.failed
+  const notFound = counters.notFound
+  const errors = counters.errors
 
   await supabase.from('scrape_runs').update({
     status: failed > (scraped + notFound) ? 'failed' : 'completed',

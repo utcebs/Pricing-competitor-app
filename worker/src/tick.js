@@ -32,15 +32,31 @@ async function tick() {
   }
 
   // 1) Consume queued scrape runs (including any just-enqueued by URL-find)
-  const { data: queued } = await supabase
+  // Sharding: SHARD_INDEX/SHARD_COUNT env vars split competitor_id space
+  // across parallel workflows. Default (no env) = single-worker mode.
+  const shardIdx   = Number(process.env.SHARD_INDEX)
+  const shardCount = Number(process.env.SHARD_COUNT)
+  const isSharded  = Number.isInteger(shardIdx) && Number.isInteger(shardCount) && shardCount > 0
+
+  // Fetch more when sharded so filtering leaves us with a full batch
+  const fetchLimit = isSharded ? 30 : 5
+  const { data: allQueued } = await supabase
     .from('scrape_runs')
     .select('*')
     .eq('status', 'queued')
     .order('created_at', { ascending: true })
-    .limit(5)
+    .limit(fetchLimit)
 
-  console.log(`[tick] processing ${queued?.length || 0} queued scrape run(s)`)
-  for (const run of (queued || [])) {
+  // Apply shard filter in JS (PostgREST has no modulo operator)
+  let queued = allQueued || []
+  if (isSharded) {
+    queued = queued.filter(r => (r.competitor_id % shardCount) === shardIdx).slice(0, 5)
+    console.log(`[tick] shard ${shardIdx}/${shardCount} — ${queued.length} of ${allQueued.length} queued runs match`)
+  }
+
+  console.log(`[tick] processing ${queued.length} queued scrape run(s)`)
+  for (const run of queued) {
+    // runScrapeJob does row-level locking so shards can't collide
     await runScrapeJob(run)
   }
 

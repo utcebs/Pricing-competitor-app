@@ -133,6 +133,12 @@ export default function Comparison() {
       })
   }, [productComparisons, q, catFilter, sortBy])
 
+  // Perf guard — comparison table is wide (columns per competitor).
+  // Cap at 300 rows to keep DOM under ~10K cells even with 30+ competitors.
+  const RENDER_CAP = 300
+  const capped = visible.length > RENDER_CAP
+  const visibleRows = capped ? visible.slice(0, RENDER_CAP) : visible
+
   const loading = pL || cL || lL || priceLoading
   const error   = pErr || cErr || lErr || priceErr
 
@@ -212,6 +218,12 @@ export default function Comparison() {
 
       <ErrorBlock error={error} />
 
+      {capped && (
+        <div className="mb-3 text-[11.5px] px-3 py-2 bg-amber-50 border border-amber-100 rounded-lg text-amber-800 inline-flex items-center gap-2">
+          Showing first {RENDER_CAP} rows of {visible.length}. Filter above to narrow down.
+        </div>
+      )}
+
       <Card className="overflow-hidden">
         {loading ? <LoadingBlock text="Building comparison" /> : visible.length === 0 ? (
           <Empty icon={GitCompare} title="Nothing to compare yet"
@@ -234,7 +246,7 @@ export default function Comparison() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-ink-100">
-                {visible.map(pc => (
+                {visibleRows.map(pc => (
                   <tr key={pc.product.id} className="hover:bg-canvas-100/60 transition-colors">
                     <Td className="sticky left-0 bg-white hover:bg-canvas-100/60 z-10">
                       <NavLink to="/prices" className="group flex items-center gap-3">
