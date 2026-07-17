@@ -130,7 +130,10 @@ export default function PriceTrends() {
     return { idx: idx + 1, total: allWithMe.length }
   }, [myPrice, pricedCompetitors])
 
-  // Reshape long → wide for the chart
+  // Reshape long → wide for the chart. Also plot 'You' as its own series
+  // (constant across the range — we only know your current price, no history)
+  // so it appears in legend + tooltip, not just as a static reference line.
+  const YOU_KEY = 'You'
   const { chartData, seriesKeys } = useMemo(() => {
     const byDay = new Map()
     const keys = new Set()
@@ -143,11 +146,14 @@ export default function PriceTrends() {
       bucket[label] = row.price
       byDay.set(day, bucket)
     })
-    return {
-      chartData: [...byDay.values()].sort((a, b) => a.date.localeCompare(b.date)),
-      seriesKeys: [...keys],
+    const rows = [...byDay.values()].sort((a, b) => a.date.localeCompare(b.date))
+    if (myPrice != null) {
+      rows.forEach(r => { r[YOU_KEY] = myPrice })
     }
-  }, [history, linkedCps, compById])
+    // Put 'You' at the front so it wins z-order + shows first in the legend.
+    const orderedKeys = myPrice != null ? [YOU_KEY, ...keys] : [...keys]
+    return { chartData: rows, seriesKeys: orderedKeys }
+  }, [history, linkedCps, compById, myPrice])
 
   // Notable moves — from the raw history, spot single-competitor >2% jumps
   const notableMoves = useMemo(() => {
@@ -342,27 +348,22 @@ export default function PriceTrends() {
                         labelStyle={{ color: '#d6d3d1', marginBottom: '4px', fontSize: '11px' }}
                       />
                       <Legend wrapperStyle={{ fontSize: 11, paddingTop: '12px' }} iconType="line" />
-                      {myPrice != null && (
-                        <ReferenceLine
-                          y={myPrice}
-                          stroke="#0c0a09"
-                          strokeDasharray="5 4"
-                          strokeWidth={2}
-                          label={{ value: `Your price (KD ${myPrice.toFixed(3)})`, position: 'right', fill: '#0c0a09', fontSize: 10, fontWeight: 600 }}
-                        />
-                      )}
-                      {seriesKeys.map((k, i) => (
-                        <Line
-                          key={k}
-                          type="monotone"
-                          dataKey={k}
-                          stroke={COMPETITOR_COLORS[i % COMPETITOR_COLORS.length]}
-                          strokeWidth={2}
-                          dot={{ r: 3, strokeWidth: 0 }}
-                          activeDot={{ r: 5, strokeWidth: 2, stroke: '#fff' }}
-                          connectNulls
-                        />
-                      ))}
+                      {seriesKeys.map((k, i) => {
+                        const isYou = k === YOU_KEY
+                        return (
+                          <Line
+                            key={k}
+                            type={isYou ? 'linear' : 'monotone'}
+                            dataKey={k}
+                            stroke={isYou ? '#0c0a09' : COMPETITOR_COLORS[(i - (myPrice != null ? 1 : 0) + COMPETITOR_COLORS.length) % COMPETITOR_COLORS.length]}
+                            strokeWidth={isYou ? 3 : 2}
+                            strokeDasharray={isYou ? '6 4' : undefined}
+                            dot={isYou ? false : { r: 3, strokeWidth: 0 }}
+                            activeDot={isYou ? false : { r: 5, strokeWidth: 2, stroke: '#fff' }}
+                            connectNulls
+                          />
+                        )
+                      })}
                     </LineChart>
                   </ResponsiveContainer>
                 </div>
