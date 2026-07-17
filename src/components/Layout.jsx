@@ -11,21 +11,28 @@ import { setLanguage } from '../lib/i18n'
 import { useTranslation } from 'react-i18next'
 import ScrapeStatusPill from './ScrapeStatusPill'
 
-const PRIMARY_NAV = [
-  { path: '/',                    key: 'nav.dashboard',    icon: LayoutDashboard },
+// Analytics / read-only views — Dashboard first, then the comparison
+// + trend + report tools + Match Review approval queue
+const INSIGHTS_NAV = [
+  { path: '/',              key: 'nav.dashboard',    icon: LayoutDashboard },
+  { path: '/comparison',    key: 'nav.comparison',   icon: GitCompare },
+  { path: '/prices',        key: 'nav.trends',       icon: LineChart },
+  { path: '/reports',       key: 'nav.reports',      icon: FileBarChart },
+  { path: '/matches',       key: 'nav.matches',      icon: Sparkles },
+]
+// Catalogue / data-entry — the SKUs, the sites, the URL links, the
+// manual price entries. Anything that's about building your dataset.
+const CATALOGUE_NAV = [
   { path: '/products',            key: 'nav.products',     icon: Package },
   { path: '/competitors',         key: 'nav.competitors',  icon: Building2 },
   { path: '/competitor-products', key: 'nav.linked',       icon: Link2 },
-  { path: '/comparison',          key: 'nav.comparison',   icon: GitCompare },
-  { path: '/prices',              key: 'nav.trends',       icon: LineChart },
   { path: '/prices/new',          key: 'nav.entry',        icon: DollarSign },
 ]
-// Everyone (manager + viewer + admin) sees these
+// Automation — the worker triggers and alerts. Kept together because
+// both are about "the system running things without you".
 const OPS_NAV = [
   { path: '/scrapers',      key: 'nav.scrapers',   icon: Play },
-  { path: '/matches',       key: 'nav.matches',    icon: Sparkles },
   { path: '/alerts',        key: 'nav.alerts',     icon: Bell },
-  { path: '/reports',       key: 'nav.reports',    icon: FileBarChart },
 ]
 // Manager + admin — catalogue governance (both roles need to organise products)
 const MANAGER_NAV = [
@@ -74,23 +81,21 @@ export default function Layout() {
         </div>
 
         <nav className="flex-1 px-3 py-2 overflow-y-auto">
+          <SectionLabel>Insights</SectionLabel>
           <div className="space-y-0.5">
-            {PRIMARY_NAV.map(item => <NavItem key={item.path} {...item} label={t(item.key)} />)}
+            {INSIGHTS_NAV.map(item => <NavItem key={item.path} {...item} label={t(item.key)} />)}
+          </div>
+
+          <SectionLabel>Catalogue</SectionLabel>
+          <div className="space-y-0.5">
+            {CATALOGUE_NAV.map(item => <NavItem key={item.path} {...item} label={t(item.key)} />)}
+            {isManager && MANAGER_NAV.map(item => <NavItem key={item.path} {...item} label={t(item.key)} />)}
           </div>
 
           <SectionLabel>Automation</SectionLabel>
           <div className="space-y-0.5">
             {OPS_NAV.map(item => <NavItem key={item.path} {...item} label={t(item.key)} />)}
           </div>
-
-          {isManager && (
-            <>
-              <SectionLabel>Catalogue</SectionLabel>
-              <div className="space-y-0.5">
-                {MANAGER_NAV.map(item => <NavItem key={item.path} {...item} label={t(item.key)} />)}
-              </div>
-            </>
-          )}
 
           {isAdmin && (
             <>
@@ -153,7 +158,7 @@ export default function Layout() {
 
 function SectionLabel({ children }) {
   return (
-    <div className="mt-6 mb-2.5 px-3 text-[9.5px] font-semibold uppercase tracking-[0.2em] text-ink-500">
+    <div className="mt-6 mb-2.5 px-3 text-[9.5px] font-semibold uppercase tracking-[0.2em] text-ink-500 first:mt-2">
       {children}
     </div>
   )
