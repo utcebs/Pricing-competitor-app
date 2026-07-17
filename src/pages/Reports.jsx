@@ -21,8 +21,10 @@ const AXIS_TICK = { fontSize: 11, fill: '#78716c', fontVariantNumeric: 'tabular-
 const TOOLTIP_STYLE = {
   background: '#0c0a09', border: 'none', borderRadius: '10px',
   color: '#fafaf9', fontSize: '12px', padding: '10px 14px',
+  boxShadow: '0 8px 24px rgba(0,0,0,0.28)',
 }
-const TOOLTIP_LABEL_STYLE = { color: '#d6d3d1', marginBottom: '4px', fontSize: '11px' }
+const TOOLTIP_LABEL_STYLE = { color: '#d6d3d1', marginBottom: '4px', fontSize: '11px', fontWeight: 600 }
+const TOOLTIP_ITEM_STYLE = { color: '#fafaf9', fontSize: '12px', padding: '2px 0' }
 
 export default function Reports() {
   const { rows: products } = useTable('products', { order: ['name', { ascending: true }] })
@@ -281,7 +283,7 @@ export default function Reports() {
                     <CartesianGrid strokeDasharray="3 3" stroke="#e7e5e4" vertical={false}/>
                     <XAxis dataKey="name" tick={AXIS_TICK} axisLine={{ stroke: '#e7e5e4' }} tickLine={false}/>
                     <YAxis tick={AXIS_TICK} axisLine={{ stroke: '#e7e5e4' }} tickLine={false} tickFormatter={v => v.toFixed(0)}/>
-                    <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} formatter={v => `KD ${Number(v).toFixed(3)}`}/>
+                    <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} itemStyle={TOOLTIP_ITEM_STYLE} formatter={v => `KD ${Number(v).toFixed(3)}`}/>
                     <Legend wrapperStyle={{ fontSize: 11, paddingTop: '8px' }} iconType="circle" iconSize={8}/>
                     <Bar dataKey="You"    fill="#0c0a09"  radius={[6, 6, 0, 0]}/>
                     <Bar dataKey="Market" fill="#b1863a"  radius={[6, 6, 0, 0]}/>
@@ -303,7 +305,7 @@ export default function Reports() {
                     <XAxis dataKey="date" tick={AXIS_TICK} axisLine={{ stroke: '#e7e5e4' }} tickLine={false}
                       tickFormatter={d => d.slice(5)}/>
                     <YAxis tick={AXIS_TICK} axisLine={{ stroke: '#e7e5e4' }} tickLine={false} tickFormatter={v => v.toFixed(0)}/>
-                    <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} formatter={v => `KD ${Number(v).toFixed(3)}`}/>
+                    <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} itemStyle={TOOLTIP_ITEM_STYLE} formatter={v => `KD ${Number(v).toFixed(3)}`}/>
                     <Legend wrapperStyle={{ fontSize: 11, paddingTop: '8px' }} iconType="line" iconSize={12}/>
                     <Line type="monotone" dataKey="min" name="Cheapest that day" stroke="#059669" strokeWidth={2} dot={false}/>
                     <Line type="monotone" dataKey="avg" name="Average" stroke="#b1863a" strokeWidth={2.5} dot={false}/>
@@ -325,7 +327,7 @@ export default function Reports() {
                     <CartesianGrid strokeDasharray="3 3" stroke="#e7e5e4" horizontal={false}/>
                     <XAxis type="number" tick={AXIS_TICK} axisLine={{ stroke: '#e7e5e4' }} tickLine={false} allowDecimals={false}/>
                     <YAxis type="category" dataKey="name" tick={AXIS_TICK} axisLine={{ stroke: '#e7e5e4' }} tickLine={false} width={100}/>
-                    <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE}/>
+                    <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} itemStyle={TOOLTIP_ITEM_STYLE}/>
                     <Legend wrapperStyle={{ fontSize: 11, paddingTop: '8px' }} iconType="circle" iconSize={8}/>
                     <Bar dataKey="Cheaper" stackId="a" fill="#059669" radius={[0, 0, 0, 0]}/>
                     <Bar dataKey="Flat"    stackId="a" fill="#d6d3d1"/>
@@ -351,7 +353,7 @@ export default function Reports() {
                          style={{ fontSize: 11, fontWeight: 600 }}>
                       {chart4.map((_, i) => <Cell key={i} fill={PALETTE[i % PALETTE.length]} stroke="#fff" strokeWidth={2}/>)}
                     </Pie>
-                    <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE}
+                    <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} itemStyle={TOOLTIP_ITEM_STYLE}
                       formatter={(v, n) => [`${v} product${v === 1 ? '' : 's'}`, n]}/>
                   </PieChart>
                 </ResponsiveContainer>
@@ -378,7 +380,7 @@ export default function Reports() {
                       tickFormatter={v => `${v > 0 ? '+' : ''}${v}%`}/>
                     <YAxis type="category" dataKey="name" tick={AXIS_TICK} axisLine={{ stroke: '#e7e5e4' }} tickLine={false} width={280}/>
                     <ReferenceLine x={0} stroke="#78716c" strokeDasharray="3 3"/>
-                    <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE}
+                    <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} itemStyle={TOOLTIP_ITEM_STYLE}
                       formatter={v => [`${v > 0 ? '+' : ''}${v}%`, 'Gap vs cheapest rival']}/>
                     <Bar dataKey="gap" radius={[0, 4, 4, 0]}>
                       {topByImpact.map((r, i) => (

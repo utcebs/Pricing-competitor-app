@@ -86,9 +86,6 @@ export default function Scrapers() {
   const scrapeNewOnly = async () => {
     setScrapeNewBusy(true); setMsg('')
     try {
-      // Fetch competitor_products that have NEVER been scraped.
-      // last_seen_at is null OR not present in price_history — the
-      // easier check is last_seen_at IS NULL (bumped on every scrape).
       const { data: unscraped, error: qErr } = await supabase
         .from('competitor_products')
         .select('id, competitor_id')
@@ -100,17 +97,23 @@ export default function Scrapers() {
         setTimeout(() => setMsg(''), 6000)
         return
       }
-      // Group by competitor — queue one scrape_run per affected competitor.
-      const uniqueCompIds = [...new Set(unscraped.map(x => x.competitor_id))]
-      const rows = uniqueCompIds.map(cid => ({
-        competitor_id: cid,
+      // Queue ONE targeted run per unscraped URL. target_cp_id makes
+      // the worker scrape exactly that row and nothing else.
+      const rows = unscraped.map(cp => ({
+        competitor_id: cp.competitor_id,
+        target_cp_id: cp.id,
         status: 'queued',
         triggered_by: user?.id,
         triggered_kind: 'manual',
       }))
       const { error: insErr } = await supabase.from('scrape_runs').insert(rows)
-      if (insErr) throw insErr
-      setMsg(`Queued ${rows.length} competitor scrape${rows.length === 1 ? '' : 's'} for ${unscraped.length} new URL${unscraped.length === 1 ? '' : 's'}. Next tick picks them up.`)
+      if (insErr) {
+        if (/target_cp_id/i.test(insErr.message)) {
+          throw new Error('target_cp_id column not present — run supabase/migrations/per-url-scrape.sql, then try again.')
+        }
+        throw insErr
+      }
+      setMsg(`Queued ${rows.length} targeted scrape${rows.length === 1 ? '' : 's'} — only the new URL${rows.length === 1 ? '' : 's'} will be fetched. Next tick picks them up.`)
       refresh()
     } catch (e) {
       setMsg('Failed: ' + (e.message || 'unknown'))
@@ -132,7 +135,7 @@ export default function Scrapers() {
         action={isManager && (
           <div className="flex items-center gap-2 flex-wrap">
             <Button variant="secondary" onClick={scrapeNewOnly} busy={scrapeNewBusy}
-              title="Queue scrapes only for competitors that have URLs which have never been scraped">
+              title="Queue targeted scrapes for URLs that have never been fetched. Only new items are scraped — existing prices are not touched.">
               <Sparkles size={14} /> Scrape new items
             </Button>
             <TriggerTickButton />
