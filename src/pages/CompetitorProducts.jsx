@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react'
 import {
   Plus, Pencil, Trash2, Link2, ExternalLink, Search, Upload,
   ChevronRight, ChevronDown, FolderTree, Package, Check, X, Sparkles,
+  Zap,
 } from 'lucide-react'
 import { NavLink } from 'react-router-dom'
 import { useTable, saveRow, deleteRow } from '../lib/db'
@@ -149,6 +150,7 @@ export default function CompetitorProducts() {
               onToggleProduct={toggleProd}
               isProdOpen={isProdOpen}
               isManager={isManager}
+              currentUserId={user?.id}
               onEditLink={(link) => setEditing(link)}
               onDeleteLink={(link) => setToDelete(link)}
               onAddLinkFor={(product, competitor) => setEditing({
@@ -235,7 +237,7 @@ export default function CompetitorProducts() {
 /* ── Category group card (collapsible) ─────────────────────── */
 function CategoryGroup({ group, linksByProduct, competitors, compById,
                          isOpen, onToggle, isProdOpen, onToggleProduct,
-                         isManager, onEditLink, onDeleteLink, onAddLinkFor,
+                         isManager, currentUserId, onEditLink, onDeleteLink, onAddLinkFor,
                          onLinkUpdated }) {
   const totalLinks = group.products.reduce((sum, p) => sum + (linksByProduct[p.id]?.length || 0), 0)
   return (
@@ -269,6 +271,7 @@ function CategoryGroup({ group, linksByProduct, competitors, compById,
               isOpen={isProdOpen(product.id)}
               onToggle={() => onToggleProduct(product.id)}
               isManager={isManager}
+              currentUserId={currentUserId}
               onEditLink={onEditLink}
               onDeleteLink={onDeleteLink}
               onAddLinkFor={onAddLinkFor}
@@ -284,7 +287,7 @@ function CategoryGroup({ group, linksByProduct, competitors, compById,
 /* ── Product row + expanded competitor URLs ────────────────── */
 function ProductNode({ product, links, competitors, compById,
                        isOpen, onToggle,
-                       isManager, onEditLink, onDeleteLink, onAddLinkFor,
+                       isManager, currentUserId, onEditLink, onDeleteLink, onAddLinkFor,
                        onLinkUpdated }) {
   const missingCompetitors = competitors.filter(c => !links.some(l => l.competitor_id === c.id))
   const hasLinks = links.length > 0
@@ -330,6 +333,7 @@ function ProductNode({ product, links, competitors, compById,
                   link={link}
                   competitor={compById[link.competitor_id]}
                   isManager={isManager}
+                  currentUserId={currentUserId}
                   onEdit={() => onEditLink(link)}
                   onDelete={() => onDeleteLink(link)}
                   onUpdated={onLinkUpdated}
@@ -356,10 +360,12 @@ function ProductNode({ product, links, competitors, compById,
 }
 
 /* ── One competitor link, URL editable inline ──────────────── */
-function LinkRowEditable({ link, competitor, isManager, onEdit, onDelete, onUpdated }) {
+function LinkRowEditable({ link, competitor, isManager, onEdit, onDelete, onUpdated, currentUserId }) {
   const [urlDraft, setUrlDraft] = useState(link.url)
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [scraping, setScraping] = useState(false)
+  const [flash, setFlash] = useState(null)   // { kind: 'success'|'error', text }
 
   useEffect(() => { setUrlDraft(link.url) }, [link.url])
 
@@ -376,8 +382,30 @@ function LinkRowEditable({ link, competitor, isManager, onEdit, onDelete, onUpda
 
   const cancel = () => { setUrlDraft(link.url); setEditing(false) }
 
+  const scrapeNow = async () => {
+    setScraping(true); setFlash(null)
+    const { error } = await supabase.from('scrape_runs').insert({
+      competitor_id: link.competitor_id,
+      target_cp_id: link.id,          // ← per-URL targeted scrape
+      status: 'queued',
+      triggered_by: currentUserId,
+      triggered_kind: 'manual',
+    })
+    setScraping(false)
+    if (error) {
+      const msg = error.message?.includes('target_cp_id')
+        ? "target_cp_id column not present — run supabase/migrations/per-url-scrape.sql"
+        : error.message
+      setFlash({ kind: 'error', text: msg })
+      setTimeout(() => setFlash(null), 8000)
+      return
+    }
+    setFlash({ kind: 'success', text: 'Queued — next tick picks it up within 5 min.' })
+    setTimeout(() => setFlash(null), 6000)
+  }
+
   return (
-    <div className="flex items-center gap-3 bg-white border border-ink-100 rounded-lg px-3 py-2 hover:border-brand-200 transition-colors">
+    <div className="relative flex items-center gap-3 bg-white border border-ink-100 rounded-lg px-3 py-2 hover:border-brand-200 transition-colors">
       <div className="flex-shrink-0 text-[11px] font-semibold text-ink-800 min-w-[110px] truncate">
         {competitor?.name || `#${link.competitor_id}`}
       </div>
@@ -420,6 +448,11 @@ function LinkRowEditable({ link, competitor, isManager, onEdit, onDelete, onUpda
       </div>
       {isManager && !editing && (
         <div className="flex items-center gap-1 flex-shrink-0">
+          <button onClick={scrapeNow} disabled={scraping}
+            title="Queue a scrape for just this URL — bypasses full competitor scrape"
+            className="p-1.5 rounded text-ink-400 hover:text-brand-700 hover:bg-brand-50 disabled:opacity-50">
+            <Zap size={13} />
+          </button>
           <button onClick={() => setEditing(true)}
             title="Edit URL inline"
             className="p-1.5 rounded text-ink-400 hover:text-brand-700 hover:bg-brand-50">
@@ -436,6 +469,13 @@ function LinkRowEditable({ link, competitor, isManager, onEdit, onDelete, onUpda
             <Trash2 size={13} />
           </button>
         </div>
+      )}
+      {flash && (
+        <div className={`absolute -bottom-6 left-0 right-0 text-[11px] px-2.5 py-1 rounded border ${
+          flash.kind === 'success'
+            ? 'bg-emerald-50 border-emerald-100 text-emerald-800'
+            : 'bg-red-50 border-red-100 text-red-800'
+        }`}>{flash.text}</div>
       )}
     </div>
   )

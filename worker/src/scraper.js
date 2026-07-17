@@ -176,9 +176,17 @@ export async function runScrapeJob(run) {
 
   const { data: competitor } = await supabase
     .from('competitors').select('*').eq('id', run.competitor_id).single()
-  const { data: items } = await supabase
-    .from('competitor_products').select('*')
+
+  // If target_cp_id is set, this run should ONLY scrape that specific URL
+  // (used by the per-URL "Scrape now" buttons). Otherwise scrape all
+  // active URLs for the competitor.
+  let itemsQuery = supabase.from('competitor_products').select('*')
     .eq('competitor_id', run.competitor_id).eq('is_active', true)
+  if (run.target_cp_id) {
+    itemsQuery = itemsQuery.eq('id', run.target_cp_id)
+    console.log(`[scraper] targeted run: only competitor_products.id=${run.target_cp_id}`)
+  }
+  const { data: items } = await itemsQuery
 
   const config = competitor?.scrape_config || {}
   const userPriceSel = (config.priceSelector || '').trim()
