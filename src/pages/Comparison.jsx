@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react'
-import { GitCompare, ArrowUpRight, ArrowDownRight, Minus, ExternalLink, Search, RefreshCw, Zap, Package } from 'lucide-react'
+import { GitCompare, ArrowUpRight, ArrowDownRight, Minus, ExternalLink, Search, RefreshCw, Zap, Package, Download } from 'lucide-react'
+import * as XLSX from 'xlsx'
 import { NavLink } from 'react-router-dom'
 import { supabase } from '../supabaseClient'
 import { useTable } from '../lib/db'
@@ -164,6 +165,53 @@ export default function Comparison() {
 
   const totalColumns = 4 + competitors.length   // sticky+your+cheapest+gap + per-competitor
 
+  // Export the full FILTERED (not capped) comparison to Excel.
+  // One row per product + one column per competitor.
+  const exportXlsx = () => {
+    const catById = Object.fromEntries(categories.map(c => [c.id, c]))
+    const rows = visible.map(pc => {
+      const base = {
+        Category: catById[pc.product.category_id]?.name || 'Uncategorised',
+        SKU: pc.product.sku,
+        Product: pc.product.name,
+        Brand: pc.product.brand || '',
+        Currency: pc.product.currency_code || 'KWD',
+        'Your Price': pc.yourPrice != null ? Number(pc.yourPrice.toFixed(3)) : null,
+        'Cheapest Rival Price': pc.minPrice != null ? Number(pc.minPrice.toFixed(3)) : null,
+        'Cheapest Rival': pc.rows
+          .filter(r => r.latest?.price != null)
+          .reduce((best, cur) => (!best || Number(cur.latest.price) < Number(best.latest.price) ? cur : best), null)
+          ?.competitor?.name || '',
+        'Avg Rival Price': pc.avgRival != null ? Number(pc.avgRival.toFixed(3)) : null,
+        'Gap vs Cheapest %': pc.gapVsMinPct != null ? Number(pc.gapVsMinPct.toFixed(2)) : null,
+        'Gap vs Avg %':      pc.gapVsAvgPct != null ? Number(pc.gapVsAvgPct.toFixed(2)) : null,
+      }
+      // Per-competitor price columns
+      for (const comp of competitors) {
+        const match = pc.rows.find(r => r.competitor.id === comp.id)
+        base[comp.name] = match?.latest?.price != null
+          ? Number(Number(match.latest.price).toFixed(3))
+          : null
+      }
+      return base
+    })
+    if (rows.length === 0) return
+    const ws = XLSX.utils.json_to_sheet(rows)
+    // Auto column widths (rough)
+    ws['!cols'] = Object.keys(rows[0]).map(k => ({
+      wch: Math.max(k.length + 2, 14)
+    }))
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Comparison')
+    const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' })
+    const ts = new Date().toISOString().slice(0, 16).replace(':', '')
+    const blob = new Blob([buf], { type: 'application/octet-stream' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = `price-comparison-${ts}.xlsx`; a.click()
+    setTimeout(() => URL.revokeObjectURL(url), 100)
+  }
+
   const loading = pL || cL || lL || priceLoading
   const error   = pErr || cErr || lErr || priceErr
 
@@ -188,6 +236,10 @@ export default function Comparison() {
             </div>
             <Button variant="secondary" onClick={refreshAll} busy={priceLoading} title="Reload from database (uses latest scraped values)">
               <RefreshCw size={14} /> Refresh
+            </Button>
+            <Button variant="secondary" onClick={exportXlsx} disabled={visible.length === 0}
+              title={`Download ${visible.length} row${visible.length === 1 ? '' : 's'} as Excel — respects current filters`}>
+              <Download size={14} /> Export
             </Button>
             {isManager && (
               <Button variant="gold" onClick={rescrapeAll} busy={rescraping}
