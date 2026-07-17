@@ -27,17 +27,20 @@ const OPS_NAV = [
   { path: '/alerts',        key: 'nav.alerts',     icon: Bell },
   { path: '/reports',       key: 'nav.reports',    icon: FileBarChart },
 ]
+// Manager + admin — catalogue governance (both roles need to organise products)
+const MANAGER_NAV = [
+  { path: '/categories',    key: 'nav.categories',   icon: FolderTree },
+]
 // Admin only — repricing rules touch pricing decisions + integrations
 // hold API credentials for Dynamics 365 / Shopify etc.
 const ADMIN_NAV = [
   { path: '/repricing',     key: 'nav.repricing',    icon: Repeat },
   { path: '/integrations',  key: 'nav.integrations', icon: Plug },
-  { path: '/categories',    key: 'nav.categories',   icon: FolderTree },
   { path: '/users',         key: 'nav.users',        icon: UserCog },
 ]
 
 export default function Layout() {
-  const { user, profile, loading, isAdmin, signOut } = useAuth()
+  const { user, profile, loading, isAdmin, isManager, signOut } = useAuth()
   const { t, i18n } = useTranslation()
 
   if (loading) {
@@ -79,6 +82,15 @@ export default function Layout() {
           <div className="space-y-0.5">
             {OPS_NAV.map(item => <NavItem key={item.path} {...item} label={t(item.key)} />)}
           </div>
+
+          {isManager && (
+            <>
+              <SectionLabel>Catalogue</SectionLabel>
+              <div className="space-y-0.5">
+                {MANAGER_NAV.map(item => <NavItem key={item.path} {...item} label={t(item.key)} />)}
+              </div>
+            </>
+          )}
 
           {isAdmin && (
             <>
