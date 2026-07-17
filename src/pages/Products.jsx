@@ -358,7 +358,7 @@ function ProductForm({ open, product, categories, currencies, onClose, onSaved }
       sku: '', name: '', brand: '', category_id: '', description: '',
       cost_price: '', min_price: '', target_margin: '', current_price: '',
       currency_code: 'KWD', is_own_brand: false, is_active: true,
-      own_url: '',
+      own_url: '', image_url: '',
       ...product,
     })
     setAutoFind(true)
@@ -384,10 +384,11 @@ function ProductForm({ open, product, categories, currencies, onClose, onSaved }
       if (priceSource === 'url') {
         if (!payload.own_url?.trim()) throw new Error('Product URL is required when price source is set to URL')
         payload.own_url = payload.own_url.trim()
-        // Keep any prior current_price as a fallback — the worker will refresh it soon
       } else {
         payload.own_url = null
       }
+      // Empty image_url → null so the scraper's cascade can fill it in later
+      payload.image_url = payload.image_url?.trim() || null
       const { data, error } = await saveRow('products', payload)
       if (error) {
         if (error.message?.includes('own_url')) {
@@ -505,6 +506,35 @@ function ProductForm({ open, product, categories, currencies, onClose, onSaved }
         <div className="md:col-span-2">
           <Field label="Description">
             <textarea className={textareaCls} value={form.description || ''} onChange={e => set('description', e.target.value)} />
+          </Field>
+        </div>
+
+        {/* Product image — manual override (empty = let scraper fill it in) */}
+        <div className="md:col-span-2">
+          <Field label="Product image URL" hint="Optional. Paste a direct image URL to override the auto-scraped image. Leave blank to let the worker use the first competitor page's og:image.">
+            <div className="flex items-start gap-3">
+              {form.image_url && (
+                <img
+                  src={form.image_url}
+                  alt="preview"
+                  className="w-16 h-16 rounded-lg object-cover border border-ink-100 bg-white flex-shrink-0"
+                  onError={e => { e.target.style.display = 'none' }}
+                />
+              )}
+              <input
+                type="url"
+                className={`${inputCls} flex-1`}
+                value={form.image_url ?? ''}
+                onChange={e => set('image_url', e.target.value)}
+                placeholder="https://cdn.example.com/product-image.jpg"
+              />
+              {form.image_url && (
+                <button type="button" onClick={() => set('image_url', '')}
+                  className="text-[11px] text-ink-500 hover:text-red-700 font-medium pt-2.5">
+                  Clear
+                </button>
+              )}
+            </div>
           </Field>
         </div>
       </div>
