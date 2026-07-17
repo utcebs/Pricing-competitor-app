@@ -77,12 +77,9 @@ export default function Login() {
             </p>
 
             <div className="mt-10 space-y-4">
-              <FeatureRow icon={LineChart} title="Continuous competitor monitoring"
-                desc="Continuously monitors competitor pricing across your selected websites, ensuring you always have access to the latest market data without manual effort." />
-              <FeatureRow icon={ShieldCheck} title="Actionable market insights"
-                desc="Consolidates competitor pricing into a centralized dashboard, making it easy to compare prices, identify trends, and spot opportunities to stay competitive." />
-              <FeatureRow icon={Zap} title="Automated alerts and recommendations"
-                desc="Detects significant pricing changes and generates intelligent repricing recommendations based on your predefined business rules, enabling faster, more informed pricing decisions." />
+              <FeatureRow icon={LineChart} title="Continuous competitor monitoring" />
+              <FeatureRow icon={ShieldCheck} title="Actionable market insights" />
+              <FeatureRow icon={Zap} title="Automated alerts and recommendations" />
             </div>
           </div>
 
@@ -152,13 +149,13 @@ export default function Login() {
 
 function FeatureRow({ icon: Icon, title, desc }) {
   return (
-    <div className="flex items-start gap-3">
+    <div className="flex items-center gap-3">
       <div className="w-8 h-8 rounded-lg bg-brand-500/15 border border-brand-500/25 flex items-center justify-center flex-shrink-0 text-brand-300">
         <Icon size={15} strokeWidth={2} />
       </div>
       <div>
-        <div className="text-[13.5px] font-semibold text-white">{title}</div>
-        <div className="text-[12.5px] text-ink-400 leading-snug mt-0.5">{desc}</div>
+        <div className="text-[14px] font-semibold text-white">{title}</div>
+        {desc && <div className="text-[12.5px] text-ink-400 leading-snug mt-0.5">{desc}</div>}
       </div>
     </div>
   )
