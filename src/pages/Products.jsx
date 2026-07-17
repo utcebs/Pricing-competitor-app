@@ -8,6 +8,7 @@ import {
   Empty, Badge, LoadingBlock, ErrorBlock, inputCls, selectCls, textareaCls,
 } from '../components/UI'
 import BulkUpload from '../components/BulkUpload'
+import FindUrlsModal from '../components/FindUrlsModal'
 
 export default function Products() {
   const { isManager, user } = useAuth()
@@ -15,12 +16,14 @@ export default function Products() {
   const { rows: categories } = useTable('categories', { order: ['name', { ascending: true }] })
   const { rows: currencies } = useTable('currencies')
   const { rows: cps, refresh: refreshCps } = useTable('competitor_products')
+  const { rows: activeCompetitors } = useTable('competitors', { eq: ['is_active', true], order: ['name', { ascending: true }] })
 
   const [editing, setEditing] = useState(null)   // null | 'new' | product object
   const [toDelete, setToDelete] = useState(null)
   const [bulkOpen, setBulkOpen] = useState(false)
   const [findingId, setFindingId] = useState(null)
   const [toast, setToast] = useState('')
+  const [findModal, setFindModal] = useState(null)   // { jobId, productName }
 
   // Filters
   const [q, setQ] = useState('')
@@ -59,10 +62,10 @@ export default function Products() {
 
   const findUrlsFor = async (product) => {
     setFindingId(product.id); setToast('')
-    const { error } = await supabase.from('url_find_jobs').insert({
+    const { data, error } = await supabase.from('url_find_jobs').insert({
       product_id: product.id,
       triggered_by: user?.id,
-    })
+    }).select().single()
     setFindingId(null)
     if (error) {
       if (error.message?.includes('url_find_jobs')) {
@@ -73,6 +76,8 @@ export default function Products() {
       setTimeout(() => setToast(''), 8000)
       return
     }
+    // Open live-status modal
+    setFindModal({ jobId: data.id, productName: product.name })
     setToast(`Searching for "${product.name}" URLs across all active competitors. Results land within ~5 minutes.`)
     setTimeout(() => { setToast(''); refreshCps() }, 8000)
   }
@@ -310,6 +315,14 @@ export default function Products() {
           if (error) return { inserted: 0, failed: payloads.length, errors: [error.message] }
           return { inserted: data.length, failed: payloads.length - data.length, errors: [] }
         }}
+      />
+
+      <FindUrlsModal
+        open={!!findModal}
+        jobId={findModal?.jobId}
+        productName={findModal?.productName}
+        competitors={activeCompetitors}
+        onClose={() => { setFindModal(null); refreshCps() }}
       />
     </div>
   )

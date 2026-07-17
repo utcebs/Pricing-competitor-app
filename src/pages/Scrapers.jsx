@@ -57,10 +57,12 @@ export default function Scrapers() {
     return () => { cancelled = true; clearInterval(id) }
   }, [runs.map(r => r.id + r.status).join(',')])
 
-  // Auto-refresh the runs list while anything is active.
+  // Auto-refresh the runs list. Faster cadence when scrapes are active
+  // (every 5s), slower otherwise (every 20s) so the worker-health tile
+  // doesn't get stuck on 'Idle' when a fresh tick has just fired.
   useEffect(() => {
-    if (!hasActiveRuns) return
-    const id = setInterval(refresh, 5000)
+    const interval = hasActiveRuns ? 5000 : 20000
+    const id = setInterval(refresh, interval)
     return () => clearInterval(id)
   }, [hasActiveRuns, refresh])
 
@@ -469,7 +471,10 @@ function HealthTile({ icon: Icon, label, value, hint, tone = 'ink', pulse = fals
 }
 
 function getWorkerHealth(runs) {
-  const active = runs.find(r => r.status !== 'queued' && r.started_at)
+  // Anything currently running counts as "healthy right now" regardless of
+  // the last-completed run's age.
+  const currentlyRunning = runs.find(r => r.status === 'running')
+  const active = currentlyRunning || runs.find(r => r.status !== 'queued' && r.started_at)
 
   if (!active) {
     return {
@@ -493,6 +498,18 @@ function getWorkerHealth(runs) {
   if (nextMin === nowD.getMinutes()) nextD.setMinutes(nextMin + 5)
   else nextD.setMinutes(nextMin)
   const nextIn = Math.max(1, Math.round((nextD.getTime() - nowMs) / 60_000))
+
+  // If there's a live 'running' run, ALWAYS show Healthy regardless of age
+  if (currentlyRunning) {
+    return {
+      status: 'Scraping now',
+      tone: 'emerald',
+      hint: `Currently processing a scrape run.`,
+      lastRun: relTime(lastTime),
+      lastRunHint: `Started ${lastTime.toLocaleString()}`,
+      nextTick: 'now',
+    }
+  }
 
   return {
     status: ageMin <= 10 ? 'Healthy' : ageMin <= 30 ? 'Idle' : 'Stale',
