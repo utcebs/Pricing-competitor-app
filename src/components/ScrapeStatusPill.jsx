@@ -1,38 +1,54 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { NavLink } from 'react-router-dom'
-import { Activity, Loader2, Clock } from 'lucide-react'
+import { Loader2, Clock } from 'lucide-react'
 import { supabase } from '../supabaseClient'
 
 /**
  * Floating status pill — bottom right of every page.
- * Polls scrape_runs for active work (queued + running) and shows count.
- * Hidden when nothing is happening.
+ *
+ * Uses Supabase Realtime (Postgres CDC) to react to scrape_runs changes
+ * with zero polling delay. Falls back to a 30s poll for safety when
+ * the WebSocket is disconnected (network flake / server restart).
  */
 export default function ScrapeStatusPill() {
   const [active, setActive] = useState({ queued: 0, running: 0, latestName: null })
 
-  useEffect(() => {
-    let cancelled = false
-    const tick = async () => {
-      const { data } = await supabase
-        .from('scrape_runs')
-        .select('id, status, competitor_id, competitors(name), started_at, created_at')
-        .in('status', ['queued', 'running'])
-        .order('created_at', { ascending: false })
-        .limit(20)
-
-      if (cancelled) return
-
-      const queued  = (data || []).filter(r => r.status === 'queued').length
-      const running = (data || []).filter(r => r.status === 'running').length
-      const latest  = (data || [])[0]
-      const latestName = latest?.competitors?.name || null
-      setActive({ queued, running, latestName })
-    }
-    tick()
-    const id = setInterval(tick, 5000)
-    return () => { cancelled = true; clearInterval(id) }
+  const refetch = useCallback(async () => {
+    const { data } = await supabase
+      .from('scrape_runs')
+      .select('id, status, competitor_id, competitors(name)')
+      .in('status', ['queued', 'running'])
+      .order('created_at', { ascending: false })
+      .limit(20)
+    const rows = data || []
+    setActive({
+      queued:  rows.filter(r => r.status === 'queued').length,
+      running: rows.filter(r => r.status === 'running').length,
+      latestName: rows[0]?.competitors?.name || null,
+    })
   }, [])
+
+  useEffect(() => {
+    refetch()   // initial
+
+    // Realtime subscription to scrape_runs changes. When the worker
+    // updates a row (queued → running → completed), we get pushed the
+    // change over WebSocket and refetch — no more 5s polling.
+    const channel = supabase
+      .channel('pill-scrape-runs')
+      .on('postgres_changes',
+          { event: '*', schema: 'public', table: 'scrape_runs' },
+          () => refetch())
+      .subscribe()
+
+    // Safety-net poll every 30s in case the WS drops silently
+    const safetyPoll = setInterval(refetch, 30_000)
+
+    return () => {
+      supabase.removeChannel(channel)
+      clearInterval(safetyPoll)
+    }
+  }, [refetch])
 
   const total = active.queued + active.running
   if (total === 0) return null

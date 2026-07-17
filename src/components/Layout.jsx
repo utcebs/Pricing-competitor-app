@@ -10,6 +10,7 @@ import { useAuth } from '../lib/auth'
 import { setLanguage } from '../lib/i18n'
 import { useTranslation } from 'react-i18next'
 import ScrapeStatusPill from './ScrapeStatusPill'
+import { prefetchRoute } from '../lib/routes'
 
 // Analytics / read-only views — Dashboard first, then the comparison
 // + trend + report tools + Match Review approval queue
@@ -181,6 +182,10 @@ function PageFallback() {
 function NavItem({ path, label, icon: Icon }) {
   return (
     <NavLink to={path} end={path === '/'}
+      // Prefetch the route's chunk on hover — by the time the click
+      // registers, the JS is already downloaded → instant navigation.
+      onMouseEnter={() => prefetchRoute(path)}
+      onFocus={() => prefetchRoute(path)}
       className={({ isActive }) =>
         `group flex items-center gap-3 px-3 py-[9px] rounded-lg text-[13px] font-medium transition-all ${
           isActive

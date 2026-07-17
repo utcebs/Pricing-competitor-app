@@ -288,13 +288,23 @@ function ProductNode({ product, links, competitors, compById,
                        onLinkUpdated }) {
   const missingCompetitors = competitors.filter(c => !links.some(l => l.competitor_id === c.id))
   const hasLinks = links.length > 0
+  // Fallback image chain: product's own → first link's scraped image
+  const image = product.image_url || links.find(l => l.image_url)?.image_url || null
   return (
     <div>
       <button onClick={onToggle}
         className="w-full flex items-center justify-between px-5 py-3 pl-14 hover:bg-canvas-100/50 transition-colors text-left">
         <div className="flex items-center gap-3 min-w-0">
           {isOpen ? <ChevronDown size={14} className="text-ink-400 flex-shrink-0" /> : <ChevronRight size={14} className="text-ink-400 flex-shrink-0" />}
-          <Package size={14} className="text-ink-400 flex-shrink-0" />
+          {image ? (
+            <img src={image} alt="" loading="lazy"
+              onError={e => { e.target.style.display = 'none' }}
+              className="w-9 h-9 rounded-lg object-cover border border-ink-100 bg-white flex-shrink-0" />
+          ) : (
+            <div className="w-9 h-9 rounded-lg bg-canvas-100 border border-ink-100 flex items-center justify-center text-ink-400 flex-shrink-0">
+              <Package size={14} strokeWidth={1.5} />
+            </div>
+          )}
           <div className="min-w-0">
             <div className="text-[13.5px] font-semibold text-ink-900 truncate">{product.name}</div>
             <div className="text-[10.5px] font-mono text-ink-500 mt-0.5">{product.sku}</div>

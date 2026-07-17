@@ -3,26 +3,26 @@ import { Routes, Route } from 'react-router-dom'
 import { AuthProvider } from './lib/auth'
 import Layout from './components/Layout'
 import Login from './pages/Login'
+import { PAGE_IMPORTS } from './lib/routes'
 
 // Lazy-loaded pages — cuts the initial bundle by ~60%.
-// Recharts + xlsx + jspdf ship only when their route mounts.
-// Suspense boundary lives INSIDE Layout so the sidebar stays put
-// while a page chunk loads (no full-screen white flash).
-const Dashboard          = lazy(() => import('./pages/Dashboard'))
-const Products           = lazy(() => import('./pages/Products'))
-const Competitors        = lazy(() => import('./pages/Competitors'))
-const CompetitorProducts = lazy(() => import('./pages/CompetitorProducts'))
-const PriceEntry         = lazy(() => import('./pages/PriceEntry'))
-const PriceTrends        = lazy(() => import('./pages/PriceTrends'))
-const Comparison         = lazy(() => import('./pages/Comparison'))
-const Categories         = lazy(() => import('./pages/Categories'))
-const Users              = lazy(() => import('./pages/Users'))
-const Scrapers           = lazy(() => import('./pages/Scrapers'))
-const MatchReview        = lazy(() => import('./pages/MatchReview'))
-const Alerts             = lazy(() => import('./pages/Alerts'))
-const Reports            = lazy(() => import('./pages/Reports'))
-const Repricing          = lazy(() => import('./pages/Repricing'))
-const Integrations       = lazy(() => import('./pages/Integrations'))
+// Sharing PAGE_IMPORTS with Layout so hover-prefetch and click-lazy
+// use the SAME import function → Vite dedupes to one chunk.
+const Dashboard          = lazy(PAGE_IMPORTS['/'])
+const Products           = lazy(PAGE_IMPORTS['/products'])
+const Competitors        = lazy(PAGE_IMPORTS['/competitors'])
+const CompetitorProducts = lazy(PAGE_IMPORTS['/competitor-products'])
+const PriceEntry         = lazy(PAGE_IMPORTS['/prices/new'])
+const PriceTrends        = lazy(PAGE_IMPORTS['/prices'])
+const Comparison         = lazy(PAGE_IMPORTS['/comparison'])
+const Categories         = lazy(PAGE_IMPORTS['/categories'])
+const Users              = lazy(PAGE_IMPORTS['/users'])
+const Scrapers           = lazy(PAGE_IMPORTS['/scrapers'])
+const MatchReview        = lazy(PAGE_IMPORTS['/matches'])
+const Alerts             = lazy(PAGE_IMPORTS['/alerts'])
+const Reports            = lazy(PAGE_IMPORTS['/reports'])
+const Repricing          = lazy(PAGE_IMPORTS['/repricing'])
+const Integrations       = lazy(PAGE_IMPORTS['/integrations'])
 
 export default function App() {
   return (

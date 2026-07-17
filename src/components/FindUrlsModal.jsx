@@ -25,7 +25,7 @@ export default function FindUrlsModal({ jobId, productName, open, onClose, compe
     if (!open || !jobId) return
     let cancelled = false
 
-    const tick = async () => {
+    const fetchJob = async () => {
       const { data, error } = await supabase
         .from('url_find_jobs')
         .select('id, status, urls_found, results, started_at, finished_at, error_summary')
@@ -35,9 +35,25 @@ export default function FindUrlsModal({ jobId, productName, open, onClose, compe
       if (error) { setPollError(error.message); return }
       setJob(data)
     }
-    tick()
-    const iv = setInterval(tick, 2000)
-    return () => { cancelled = true; clearInterval(iv) }
+    fetchJob()   // initial
+
+    // Realtime: subscribe to this specific job's UPDATE events.
+    // Zero-latency vs the previous 2s poll.
+    const channel = supabase
+      .channel(`find-job-${jobId}`)
+      .on('postgres_changes',
+          { event: 'UPDATE', schema: 'public', table: 'url_find_jobs', filter: `id=eq.${jobId}` },
+          () => fetchJob())
+      .subscribe()
+
+    // Safety-net poll: 10s (was 2s). Only fires if WS drops.
+    const safety = setInterval(fetchJob, 10_000)
+
+    return () => {
+      cancelled = true
+      supabase.removeChannel(channel)
+      clearInterval(safety)
+    }
   }, [open, jobId])
 
   if (!open) return null
