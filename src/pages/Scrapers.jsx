@@ -13,7 +13,7 @@ import {
 import TriggerTickButton from '../components/TriggerTickButton'
 
 export default function Scrapers() {
-  const { isManager, user } = useAuth()
+  const { isManager, isAdmin, user } = useAuth()
   const { rows: competitors, loading: cLoading } = useTable('competitors', { eq: ['is_active', true], order: ['name', { ascending: true }] })
   const { rows: runs, loading: rLoading, error, refresh } =
     useTable('scrape_runs', { order: ['created_at', { ascending: false }], limit: 50 })
@@ -296,7 +296,7 @@ export default function Scrapers() {
         onClose={() => setOpenRunId(null)}
       />
 
-      {isManager && <ProxySetupCard />}
+      {isAdmin && <ProxySetupCard />}
     </div>
   )
 }
