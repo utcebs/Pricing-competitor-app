@@ -268,8 +268,14 @@ export default function Products() {
         open={!!toDelete}
         onClose={() => setToDelete(null)}
         title="Delete product?"
-        message={`This will permanently delete "${toDelete?.name}" and any competitor links tied to it will be unlinked.`}
+        message={`This will permanently delete "${toDelete?.name}", along with every competitor URL linked to it and all price history captured for those URLs.`}
         onConfirm={async () => {
+          // Delete competitor_products first so their price_history cascades
+          // away too (schema uses ON DELETE CASCADE on price_history →
+          // competitor_products). If we deleted the product first, the FK's
+          // ON DELETE SET NULL would leave orphan CP rows with product_id=null
+          // and is_active=true — the scraper would keep hitting them.
+          await supabase.from('competitor_products').delete().eq('product_id', toDelete.id)
           await deleteRow('products', toDelete.id)
           setToDelete(null); refresh()
         }}

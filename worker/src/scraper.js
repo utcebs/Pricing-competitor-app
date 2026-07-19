@@ -180,8 +180,12 @@ export async function runScrapeJob(run) {
   // If target_cp_id is set, this run should ONLY scrape that specific URL
   // (used by the per-URL "Scrape now" buttons). Otherwise scrape all
   // active URLs for the competitor.
+  // Also skip orphan rows: product_id may be NULL if the parent product
+  // was deleted with ON DELETE SET NULL. The client delete flow removes
+  // them proactively, this is a belt-and-suspenders filter for legacy rows.
   let itemsQuery = supabase.from('competitor_products').select('*')
     .eq('competitor_id', run.competitor_id).eq('is_active', true)
+    .not('product_id', 'is', null)
   if (run.target_cp_id) {
     itemsQuery = itemsQuery.eq('id', run.target_cp_id)
     console.log(`[scraper] targeted run: only competitor_products.id=${run.target_cp_id}`)
