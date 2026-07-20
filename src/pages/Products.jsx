@@ -254,10 +254,17 @@ export default function Products() {
         product={editing}
         categories={categories}
         currencies={currencies}
+        competitors={activeCompetitors}
         onClose={close}
-        onSaved={(findQueued) => {
+        onSaved={(findQueued, manualLinksInserted) => {
           close(); refresh(); refreshCps()
-          if (findQueued) {
+          if (manualLinksInserted && findQueued) {
+            setToast(`Product saved with ${manualLinksInserted} competitor URL${manualLinksInserted === 1 ? '' : 's'} — also searching for URLs on the remaining competitors.`)
+            setTimeout(() => setToast(''), 10000)
+          } else if (manualLinksInserted) {
+            setToast(`Product saved with ${manualLinksInserted} competitor URL${manualLinksInserted === 1 ? '' : 's'} linked. First scrape kicks off within 5 min.`)
+            setTimeout(() => setToast(''), 10000)
+          } else if (findQueued) {
             setToast('Product saved — searching for competitor URLs across all active sites. Results in ~5 minutes.')
             setTimeout(() => setToast(''), 10000)
           }
@@ -347,13 +354,14 @@ export default function Products() {
   )
 }
 
-function ProductForm({ open, product, categories, currencies, onClose, onSaved }) {
+function ProductForm({ open, product, categories, currencies, competitors = [], onClose, onSaved }) {
   const { user } = useAuth()
   const [form, setForm] = useState({})
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [autoFind, setAutoFind] = useState(true)
   const [priceSource, setPriceSource] = useState('manual')   // 'manual' | 'url'
+  const [manualLinks, setManualLinks] = useState([])         // [{ competitor_id, url }]
 
   const isNew = !product?.id
 
@@ -368,10 +376,15 @@ function ProductForm({ open, product, categories, currencies, onClose, onSaved }
       ...product,
     })
     setAutoFind(true)
+    setManualLinks([])
     // If the product came in with an own_url, start on URL tab
     setPriceSource(product?.own_url ? 'url' : 'manual')
     setErr('')
   }, [open, product?.id])
+
+  const addLinkRow = () => setManualLinks(rows => [...rows, { competitor_id: '', url: '' }])
+  const setLink = (i, k, v) => setManualLinks(rows => rows.map((r, idx) => idx === i ? { ...r, [k]: v } : r))
+  const removeLink = (i) => setManualLinks(rows => rows.filter((_, idx) => idx !== i))
 
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }))
 
@@ -403,6 +416,29 @@ function ProductForm({ open, product, categories, currencies, onClose, onSaved }
         throw error
       }
 
+      // Insert manual competitor URLs the user entered inline (both for
+      // new AND existing products — edit mode users can add more here).
+      let manualLinksInserted = 0
+      const validLinks = manualLinks
+        .map(r => ({ ...r, url: r.url?.trim() }))
+        .filter(r => r.competitor_id && r.url)
+      if (validLinks.length && data?.id) {
+        const linkRows = validLinks.map(r => ({
+          competitor_id: Number(r.competitor_id),
+          product_id: data.id,
+          url: r.url,
+          name: form.name || r.url,   // NOT NULL; scraper will refine on first tick
+          match_method: 'manual',
+        }))
+        // upsert on (competitor_id, url) so re-submits don't error on the unique index
+        const { data: inserted, error: linkErr } = await supabase
+          .from('competitor_products')
+          .upsert(linkRows, { onConflict: 'competitor_id,url', ignoreDuplicates: false })
+          .select('id')
+        if (linkErr) throw new Error(`Product saved, but couldn't link URLs: ${linkErr.message}`)
+        manualLinksInserted = inserted?.length || linkRows.length
+      }
+
       // If it's a NEW product AND the user checked "auto-find URLs",
       // queue a url_find_jobs row so the worker searches every active
       // competitor for a matching URL on its next tick.
@@ -417,7 +453,7 @@ function ProductForm({ open, product, categories, currencies, onClose, onSaved }
         if (!findErr) findQueued = true
       }
 
-      onSaved(findQueued)
+      onSaved(findQueued, manualLinksInserted)
     } catch (e) {
       setErr(e.message || 'Save failed')
     } finally {
@@ -545,6 +581,45 @@ function ProductForm({ open, product, categories, currencies, onClose, onSaved }
         </div>
       </div>
 
+      {/* Manual competitor URLs — user can bootstrap known URLs inline */}
+      <div className="mt-5 p-4 rounded-xl border border-ink-100 bg-canvas-100/40">
+        <div className="flex items-baseline justify-between mb-1">
+          <div className="text-[13px] font-semibold text-ink-900 inline-flex items-center gap-1.5">
+            <Link2 size={13} className="text-ink-600" />
+            Competitor URLs {manualLinks.length > 0 && <span className="text-ink-400 font-normal">· {manualLinks.length} row{manualLinks.length === 1 ? '' : 's'}</span>}
+          </div>
+          <button type="button" onClick={addLinkRow}
+            className="text-[11.5px] font-semibold text-brand-700 hover:text-brand-800 inline-flex items-center gap-1">
+            <Plus size={12} /> Add URL
+          </button>
+        </div>
+        <div className="text-[11.5px] text-ink-500 mb-3 leading-relaxed">
+          Optional. Paste one competitor product URL per row — the scraper picks them up on its next tick (within 5 min). You can also do this later on the Linked Items page.
+        </div>
+        {manualLinks.length === 0 ? (
+          <div className="text-[11.5px] text-ink-400 italic py-2">No URLs yet — click "Add URL" to enter one.</div>
+        ) : (
+          <div className="space-y-2">
+            {manualLinks.map((row, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <select className={`${selectCls} w-48 flex-shrink-0`}
+                  value={row.competitor_id} onChange={e => setLink(i, 'competitor_id', e.target.value)}>
+                  <option value="">Competitor…</option>
+                  {competitors.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+                <input type="url" className={`${inputCls} flex-1`}
+                  placeholder="https://competitor.com/product-page"
+                  value={row.url} onChange={e => setLink(i, 'url', e.target.value)} />
+                <button type="button" onClick={() => removeLink(i)}
+                  className="p-1.5 rounded text-ink-400 hover:text-red-600 hover:bg-red-50 flex-shrink-0">
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       {err && <div className="mt-4 text-sm text-red-600">{err}</div>}
 
       {isNew && (
@@ -562,7 +637,7 @@ function ProductForm({ open, product, categories, currencies, onClose, onSaved }
                 Auto-find URLs on active competitor sites
               </div>
               <div className="text-[11.5px] text-ink-600 mt-0.5 leading-relaxed">
-                After saving, the worker will search every active competitor for a matching URL and link it automatically. Results in ~5 minutes. You can review or unlink each match on the Linked Items page.
+                After saving, the worker will search every active competitor for a matching URL and link it automatically. Results in ~5 minutes. Duplicates of URLs you added above are skipped.
               </div>
             </div>
           </label>
