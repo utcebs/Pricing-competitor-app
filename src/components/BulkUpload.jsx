@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react'
 import Papa from 'papaparse'
-import { Download, Upload, FileText, CheckCircle2, AlertTriangle } from 'lucide-react'
+import { Download, Upload, FileText, CheckCircle2, AlertTriangle, RefreshCw } from 'lucide-react'
 import { Modal, Button, Card } from './UI'
 
 /**
@@ -22,7 +22,10 @@ export default function BulkUpload({
   templateFilename, templateHeaders, sampleRows = [],
   transformRow, onImport,
   hint,
+  onRefreshTemplate,           // optional: called when user hits "refresh template"
+  templateNote,                // optional caption under the template block
 }) {
+  const [refreshingTpl, setRefreshingTpl] = useState(false)
   const [file, setFile] = useState(null)
   const [parsedRows, setParsedRows] = useState([])
   const [rowErrors, setRowErrors] = useState([])
@@ -99,11 +102,27 @@ export default function BulkUpload({
             <div className="text-xs text-slate-500 mt-0.5">
               CSV with the exact columns you need. Fill it in Excel/Numbers, save as CSV, upload below.
             </div>
+            {templateNote && (
+              <div className="text-[11.5px] text-ink-500 mt-1.5 leading-relaxed">{templateNote}</div>
+            )}
             {hint && <div className="text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded px-2 py-1 mt-2">{hint}</div>}
           </div>
-          <Button variant="secondary" onClick={downloadTemplate}>
-            <Download size={14} /> Template
-          </Button>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {onRefreshTemplate && (
+              <button type="button"
+                onClick={async () => {
+                  setRefreshingTpl(true)
+                  try { await onRefreshTemplate() } finally { setRefreshingTpl(false) }
+                }}
+                title="Re-fetch the latest set of competitors and rebuild the template columns"
+                className={`p-2 rounded-lg text-slate-500 hover:text-brand-700 hover:bg-brand-50 transition-colors ${refreshingTpl ? 'animate-spin' : ''}`}>
+                <RefreshCw size={14} />
+              </button>
+            )}
+            <Button variant="secondary" onClick={downloadTemplate}>
+              <Download size={14} /> Template
+            </Button>
+          </div>
         </div>
       </Card>
 
@@ -178,8 +197,11 @@ export default function BulkUpload({
           result.inserted > 0 ? 'bg-emerald-50 text-emerald-800' : 'bg-red-50 text-red-800'
         }`}>
           <CheckCircle2 size={15} />
-          <span>Imported {result.inserted} row{result.inserted === 1 ? '' : 's'}
-            {result.failed > 0 && ` · ${result.failed} failed`}.</span>
+          <span>
+            Imported {result.inserted} row{result.inserted === 1 ? '' : 's'}
+            {result.failed > 0 && ` · ${result.failed} failed`}.
+            {result.note && <> {result.note}</>}
+          </span>
         </div>
       )}
 

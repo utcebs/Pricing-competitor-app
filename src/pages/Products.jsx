@@ -10,13 +10,20 @@ import {
 import BulkUpload from '../components/BulkUpload'
 import FindUrlsModal from '../components/FindUrlsModal'
 
+// "Best Al-Yousifi" → "best_al_yousifi" — used to build url_<competitor> columns
+// on the bulk-import template.
+const slugify = (s = '') =>
+  s.toLowerCase().trim()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+
 export default function Products() {
   const { isManager, user } = useAuth()
   const { rows: products, loading, error, refresh } = useTable('products', { order: ['name', { ascending: true }] })
   const { rows: categories } = useTable('categories', { order: ['name', { ascending: true }] })
   const { rows: currencies } = useTable('currencies')
   const { rows: cps, refresh: refreshCps } = useTable('competitor_products')
-  const { rows: activeCompetitors } = useTable('competitors', { eq: ['is_active', true], order: ['name', { ascending: true }] })
+  const { rows: activeCompetitors, refresh: refreshCompetitors } = useTable('competitors', { eq: ['is_active', true], order: ['name', { ascending: true }] })
 
   const [editing, setEditing] = useState(null)   // null | 'new' | product object
   const [toDelete, setToDelete] = useState(null)
@@ -293,20 +300,33 @@ export default function Products() {
         onClose={() => setBulkOpen(false)}
         title="Bulk import products"
         templateFilename="products-template.csv"
+        onRefreshTemplate={refreshCompetitors}
+        templateNote={`One column per active competitor (${activeCompetitors.length} today). Added a new competitor? Hit refresh below to regenerate the template.`}
         templateHeaders={[
           'sku','name','brand','category_name','currency_code',
           'cost_price','min_price','current_price','target_margin',
           'is_own_brand','description',
+          // One URL column per active competitor. Name → slug: "Best Al-Yousifi" → url_best_al_yousifi
+          ...activeCompetitors.map(c => `url_${slugify(c.name)}`),
         ]}
         sampleRows={[
-          { sku:'SKU-001', name:'Kettle 1.7L', brand:'AquaBoil', category_name:'Home Appliances',
+          {
+            sku:'SKU-001', name:'Kettle 1.7L', brand:'AquaBoil', category_name:'Home Appliances',
             currency_code:'KWD', cost_price:'4.500', min_price:'5.900', current_price:'8.900',
-            target_margin:'30', is_own_brand:'false', description:'1.7L cordless electric kettle' },
-          { sku:'SKU-002', name:'Blender 800W', brand:'MixPro', category_name:'Home Appliances',
+            target_margin:'30', is_own_brand:'false', description:'1.7L cordless electric kettle',
+            ...Object.fromEntries(activeCompetitors.map((c, i) => [
+              `url_${slugify(c.name)}`,
+              i === 0 ? 'https://example.com/kettle-1-7L' : '',
+            ])),
+          },
+          {
+            sku:'SKU-002', name:'Blender 800W', brand:'MixPro', category_name:'Home Appliances',
             currency_code:'KWD', cost_price:'6.750', min_price:'9.500', current_price:'12.900',
-            target_margin:'35', is_own_brand:'true', description:'800W countertop blender' },
+            target_margin:'35', is_own_brand:'true', description:'800W countertop blender',
+            ...Object.fromEntries(activeCompetitors.map(c => [`url_${slugify(c.name)}`, ''])),
+          },
         ]}
-        hint="category_name must exactly match a Category you already created (leave blank to skip). currency_code must be a code in your Currencies table (KWD/USD/…)."
+        hint={`category_name must match a Category (leave blank to skip). currency_code must be a code in Currencies (KWD/USD/…). ${activeCompetitors.length > 0 ? `Optional url_<competitor> columns link the product to that competitor's URL during import — leave blank to skip.` : ''}`}
         transformRow={(row) => {
           if (!row.sku?.trim() || !row.name?.trim()) return { error: 'sku and name are required' }
           const cat = row.category_name?.trim()
@@ -318,6 +338,12 @@ export default function Products() {
             : null
           const num = (v) => (v === '' || v == null) ? null : Number(v)
           const bool = (v) => String(v || '').toLowerCase() === 'true' || v === '1'
+          // Extract any url_<competitor> columns that have a value
+          const manualLinks = []
+          for (const c of activeCompetitors) {
+            const val = row[`url_${slugify(c.name)}`]?.trim()
+            if (val) manualLinks.push({ competitor_id: c.id, url: val })
+          }
           return {
             payload: {
               sku: row.sku.trim(),
@@ -332,14 +358,50 @@ export default function Products() {
               target_margin: num(row.target_margin),
               is_own_brand: bool(row.is_own_brand),
               is_active: true,
+              _manualLinks: manualLinks,  // stripped before insert
             }
           }
         }}
         onImport={async (payloads) => {
-          const { data, error } = await supabase.from('products').insert(payloads).select()
-          refresh()
-          if (error) return { inserted: 0, failed: payloads.length, errors: [error.message] }
-          return { inserted: data.length, failed: payloads.length - data.length, errors: [] }
+          // Strip _manualLinks (not a real column) but remember it per row
+          const linksByIdx = payloads.map(p => p._manualLinks || [])
+          const cleaned = payloads.map(({ _manualLinks, ...rest }) => rest)
+          const { data, error } = await supabase.from('products').insert(cleaned).select()
+          if (error) { refresh(); return { inserted: 0, failed: payloads.length, errors: [error.message] } }
+
+          // Build the flat list of competitor_products to insert
+          const linkRows = []
+          data.forEach((prod, i) => {
+            for (const l of linksByIdx[i]) {
+              linkRows.push({
+                competitor_id: l.competitor_id,
+                product_id: prod.id,
+                url: l.url,
+                name: prod.name,           // scraper refines on first tick
+                match_method: 'manual',
+              })
+            }
+          })
+          let linksInserted = 0
+          const linkErrors = []
+          if (linkRows.length) {
+            const { data: linkData, error: linkErr } = await supabase
+              .from('competitor_products')
+              .upsert(linkRows, { onConflict: 'competitor_id,url', ignoreDuplicates: false })
+              .select('id')
+            if (linkErr) linkErrors.push(`Products imported, but URL linking failed: ${linkErr.message}`)
+            else linksInserted = linkData?.length || 0
+          }
+
+          refresh(); refreshCps()
+          return {
+            inserted: data.length,
+            failed: payloads.length - data.length,
+            errors: linkErrors,
+            note: linksInserted > 0
+              ? `Also linked ${linksInserted} competitor URL${linksInserted === 1 ? '' : 's'}.`
+              : undefined,
+          }
         }}
       />
 
@@ -359,7 +421,7 @@ function ProductForm({ open, product, categories, currencies, competitors = [], 
   const [form, setForm] = useState({})
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
-  const [autoFind, setAutoFind] = useState(true)
+  const [autoFind, setAutoFind] = useState(false)
   const [priceSource, setPriceSource] = useState('manual')   // 'manual' | 'url'
   const [manualLinks, setManualLinks] = useState([])         // [{ competitor_id, url }]
 
@@ -375,7 +437,7 @@ function ProductForm({ open, product, categories, currencies, competitors = [], 
       own_url: '', image_url: '',
       ...product,
     })
-    setAutoFind(true)
+    setAutoFind(false)
     setManualLinks([])
     // If the product came in with an own_url, start on URL tab
     setPriceSource(product?.own_url ? 'url' : 'manual')
