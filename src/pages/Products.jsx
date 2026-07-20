@@ -282,16 +282,25 @@ export default function Products() {
         open={!!toDelete}
         onClose={() => setToDelete(null)}
         title="Delete product?"
-        message={`This will permanently delete "${toDelete?.name}", along with every competitor URL linked to it and all price history captured for those URLs.`}
+        message={`This will permanently delete "${toDelete?.name}", every competitor URL linked to it, all price/stock history captured for those URLs, any pending repricing proposals, URL-find jobs, match suggestions, and alert rules targeting this product. This can't be undone.`}
         onConfirm={async () => {
-          // Delete competitor_products first so their price_history cascades
-          // away too (schema uses ON DELETE CASCADE on price_history →
-          // competitor_products). If we deleted the product first, the FK's
-          // ON DELETE SET NULL would leave orphan CP rows with product_id=null
-          // and is_active=true — the scraper would keep hitting them.
+          // Order matters. Everything below either CASCADEs off the product
+          // itself (pricing_proposals, url_find_jobs, match_suggestions,
+          // competitor_products.product_id → SET NULL) or off competitor_products
+          // (price_history, stock_history, scrape_jobs, scrape_runs.target_cp_id).
+          //
+          // Two things need manual cleanup:
+          //   1. competitor_products (schema uses SET NULL, would leave orphans
+          //      with is_active=true — scraper would keep hitting them)
+          //   2. alert_rules where scope='specific_product' and scope_ref_id
+          //      matches — polymorphic pointer, no FK, would orphan otherwise.
+          //      Its alert_deliveries CASCADE off the rule, so we don't need to
+          //      touch those separately.
           await supabase.from('competitor_products').delete().eq('product_id', toDelete.id)
+          await supabase.from('alert_rules').delete()
+            .eq('scope', 'specific_product').eq('scope_ref_id', toDelete.id)
           await deleteRow('products', toDelete.id)
-          setToDelete(null); refresh()
+          setToDelete(null); refresh(); refreshCps()
         }}
       />
 

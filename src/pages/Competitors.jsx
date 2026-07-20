@@ -89,8 +89,17 @@ export default function Competitors() {
         open={!!toDelete}
         onClose={() => setToDelete(null)}
         title="Delete competitor?"
-        message={`This will remove "${toDelete?.name}" and CASCADE-delete every competitor product linked to it (plus their price/stock history).`}
-        onConfirm={async () => { await deleteRow('competitors', toDelete.id); setToDelete(null); refresh() }}
+        message={`This will permanently delete "${toDelete?.name}", every product URL linked under it, all price/stock history captured for those URLs, every scrape run and job, match suggestions, and alert rules targeting this competitor. This can't be undone.`}
+        onConfirm={async () => {
+          // competitors delete cascades (competitor_products, scrape_runs,
+          // url_find_jobs, then everything hanging off competitor_products).
+          // The only orphan risk is alert_rules.scope_ref_id — polymorphic
+          // pointer, no FK — clean up first.
+          await supabase.from('alert_rules').delete()
+            .eq('scope', 'specific_competitor').eq('scope_ref_id', toDelete.id)
+          await deleteRow('competitors', toDelete.id)
+          setToDelete(null); refresh()
+        }}
       />
 
       <BulkUpload
