@@ -18,7 +18,25 @@ async function tick() {
   const started = Date.now()
   console.log('[tick] start @', new Date().toISOString())
 
-  // 0) URL-finder jobs first — they may enqueue scrape runs that we'll
+  // 0a) Sweep stuck runs. If a prior tick crashed / timed out mid-scrape,
+  //     the row stays status='running' forever, clutters the dashboard's
+  //     "Live activity", and blocks nothing from being re-queued but
+  //     shows a permanent progress bar. Anything running > 15 min is
+  //     definitively stuck (single-URL scrapes take <30s each).
+  const stuckCutoff = new Date(Date.now() - 15 * 60_000).toISOString()
+  const { data: stuck } = await supabase
+    .from('scrape_runs')
+    .update({
+      status: 'error',
+      finished_at: new Date().toISOString(),
+      error_message: 'stuck run auto-cleaned by tick (worker likely crashed mid-scrape)',
+    })
+    .eq('status', 'running')
+    .lt('started_at', stuckCutoff)
+    .select('id')
+  if (stuck?.length) console.log(`[tick] cleaned up ${stuck.length} stuck run(s)`)
+
+  // 0b) URL-finder jobs first — they may enqueue scrape runs that we'll
   //    then consume in step 1, so a single tick can find+scrape.
   const { data: findJobs } = await supabase
     .from('url_find_jobs')
