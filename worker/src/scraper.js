@@ -36,11 +36,27 @@ async function processOneUrl(cp, ctx, run, config, userPriceSel, userStockSel, c
   try {
     page = await ctx.newPage()
     await page.goto(cp.url, { waitUntil: 'domcontentloaded', timeout: 45_000 })
+
     if (config.waitFor?.trim()) {
-      await page.waitForSelector(config.waitFor, { timeout: 10_000 }).catch(() => {})
+      // Competitor explicitly configured what to wait for → use it
+      await page.waitForSelector(config.waitFor, { timeout: 15_000 }).catch(() => {})
     } else {
-      await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => {})
-      await page.waitForTimeout(1500)
+      // Auto-detect the framework and adapt the wait strategy.
+      // Angular SPAs (Eureka runs AngularJS) never emit networkidle because
+      // they keep XHRs alive. Race a price-element wait against a hard
+      // timeout so slow SPAs get enough time, fast SSR pages don't waste any.
+      const isAngular = await page.$('[ng-app], [data-ng-app]').then(el => !!el).catch(() => false)
+      const wait = isAngular ? 25_000 : 15_000
+
+      await Promise.race([
+        // "networkidle" wins on SSR / static pages
+        page.waitForLoadState('networkidle', { timeout: wait }).catch(() => {}),
+        // "price element rendered" wins on SPAs
+        page.waitForSelector(PRICE_READY_CANDIDATES.join(', '), { timeout: wait }).catch(() => {}),
+      ])
+      // Small buffer even after either signal — Angular's $digest cycle may
+      // still be interpolating text into the bound element.
+      await page.waitForTimeout(isAngular ? 2000 : 1000)
     }
     const { price, matchedSelector, htmlSample } = await extractPrice(page, userPriceSel)
     const inStock = await extractStock(page, userStockSel)
@@ -113,6 +129,12 @@ const PRICE_CANDIDATES = [
   // Schema.org — usually the strongest signal
   'meta[itemprop="price"]',
   '[itemprop="price"]',
+  // Eureka (AngularJS) — most specific first
+  '[ng-bind*="DetailViewItem.StrikePrice"]',
+  '[ng-bind*="DetailViewItem.CASH_LIST_PRICE"]',
+  '[ng-bind*="DetailViewItem.LIST_PRICE"]',
+  '.Itemprice',
+  '[class*="Itemprice"]',
   // Common platform-specific
   '.product-single__price',      // Shopify
   '.price-item--sale',            // Shopify
@@ -146,6 +168,21 @@ const PRICE_CANDIDATES = [
   // React/Vue apps often use span with price string inside
   'span.price',
   'div.price',
+]
+
+// Subset used ONLY to detect "the price element exists in the DOM" so we
+// can stop waiting on SPAs. These need to match structural selectors that
+// appear in the shell HTML too, so we can wait for them even before Angular
+// binds text into them. Keep short — full extraction uses PRICE_CANDIDATES.
+const PRICE_READY_CANDIDATES = [
+  'meta[itemprop="price"]',
+  '[itemprop="price"]',
+  '[ng-bind*="DetailViewItem"]',     // Eureka main price binding
+  '[ng-bind*="Price"]',              // Eureka related-items bindings
+  '[data-testid*="price" i]',
+  '[data-hook*="price" i]',
+  '[data-price]',
+  '.price',
 ]
 
 const STOCK_CANDIDATES = [
