@@ -33,8 +33,22 @@ function humanDelay(minMs = 3000, maxMs = 5000) {
 async function processOneUrl(cp, ctx, run, config, userPriceSel, userStockSel, counters) {
   const started = Date.now()
   let page = null
+  // Collect JSON responses so we can rummage for prices if DOM extraction
+  // fails. Eureka and other SPAs pull product data from JSON endpoints —
+  // hitting those directly gives us the price even when the DOM binding
+  // stalls. Bounded to 30 responses to keep memory tame.
+  const jsonResponses = []
   try {
     page = await ctx.newPage()
+    page.on('response', async (res) => {
+      try {
+        if (jsonResponses.length >= 30) return
+        const ct = (res.headers()['content-type'] || '').toLowerCase()
+        if (!ct.includes('json')) return
+        const body = await res.json().catch(() => null)
+        if (body && typeof body === 'object') jsonResponses.push(body)
+      } catch { /* ignore per-response errors */ }
+    })
     await page.goto(cp.url, { waitUntil: 'domcontentloaded', timeout: 45_000 })
 
     if (config.waitFor?.trim()) {
@@ -43,22 +57,40 @@ async function processOneUrl(cp, ctx, run, config, userPriceSel, userStockSel, c
     } else {
       // Auto-detect the framework and adapt the wait strategy.
       // Angular SPAs (Eureka runs AngularJS) never emit networkidle because
-      // they keep XHRs alive. Race a price-element wait against a hard
-      // timeout so slow SPAs get enough time, fast SSR pages don't waste any.
+      // they keep XHRs alive. Also they use ng-cloak — the element exists
+      // early but has empty textContent until DetailViewItem loads from AJAX.
       const isAngular = await page.$('[ng-app], [data-ng-app]').then(el => !!el).catch(() => false)
-      const wait = isAngular ? 25_000 : 15_000
+      const wait = isAngular ? 30_000 : 15_000
 
       await Promise.race([
         // "networkidle" wins on SSR / static pages
         page.waitForLoadState('networkidle', { timeout: wait }).catch(() => {}),
-        // "price element rendered" wins on SPAs
-        page.waitForSelector(PRICE_READY_CANDIDATES.join(', '), { timeout: wait }).catch(() => {}),
+        // For SPAs: wait for the price element's TEXT to actually populate,
+        // not just for the element to exist. Angular binds text lazily after
+        // its AJAX-driven $scope hydrates.
+        page.waitForFunction((sels) => {
+          for (const s of sels) {
+            const el = document.querySelector(s)
+            if (!el) continue
+            const t = (el.getAttribute?.('content') || el.textContent || '').trim()
+            // Accept if we see any digits — parsePrice will validate later
+            if (/\d/.test(t)) return true
+          }
+          return false
+        }, PRICE_READY_CANDIDATES, { timeout: wait, polling: 500 }).catch(() => {}),
       ])
       // Small buffer even after either signal — Angular's $digest cycle may
-      // still be interpolating text into the bound element.
-      await page.waitForTimeout(isAngular ? 2000 : 1000)
+      // still be interpolating text into related bindings.
+      await page.waitForTimeout(isAngular ? 1500 : 800)
     }
-    const { price, matchedSelector, htmlSample } = await extractPrice(page, userPriceSel)
+    let { price, matchedSelector, htmlSample } = await extractPrice(page, userPriceSel)
+    // Fallback: rummage through any JSON responses we collected during load
+    if (price == null && jsonResponses.length > 0) {
+      for (const body of jsonResponses) {
+        const p = findPriceInObject(body)
+        if (p != null) { price = p; matchedSelector = 'network-json'; break }
+      }
+    }
     const inStock = await extractStock(page, userStockSel)
     const imageUrl = await extractImage(page, cp.url)
     await page.close(); page = null
@@ -377,6 +409,9 @@ function findPriceInObject(obj, depth = 0) {
   if (depth > 10 || obj == null) return null
   if (typeof obj !== 'object') return null
   const PRICE_KEYS = [
+    // Eureka (AngularJS backend) — most specific first
+    'StrikePrice', 'CASH_LIST_PRICE', 'LIST_PRICE',
+    // Common camelCase / generic
     'sellingPrice', 'salePrice', 'offerPrice', 'finalPrice',
     'currentPrice', 'listPrice', 'discountedPrice', 'productPrice',
     'price', 'amount',
