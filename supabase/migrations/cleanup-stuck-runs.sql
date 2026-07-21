@@ -1,16 +1,16 @@
 -- ============================================================
--- One-shot cleanup: mark any scrape_runs stuck in 'running' state
--- for more than 15 minutes as 'error'. From now on the tick worker
--- does this automatically at the start of every run
--- (worker/src/tick.js — step 0a), but this clears the historical
--- backlog immediately without waiting for the next tick.
+-- One-shot cleanup: mark scrape_runs stuck in 'running' for more
+-- than 15 minutes as 'failed'. The tick worker does this
+-- automatically at start-of-tick from now on
+-- (worker/src/tick.js — step 0a); this SQL clears the historical
+-- backlog immediately.
 -- ============================================================
 
 UPDATE public.scrape_runs
 SET
-  status = 'error',
+  status = 'failed',
   finished_at = NOW(),
-  error_message = COALESCE(error_message, 'stuck run cleaned up (worker likely crashed mid-scrape)')
+  error_summary = COALESCE(error_summary, 'stuck run cleaned up (worker likely crashed mid-scrape)')
 WHERE status = 'running'
   AND started_at < NOW() - INTERVAL '15 minutes';
 

@@ -1,6 +1,7 @@
 import { chromium as chromiumExtra } from 'playwright-extra'
 import StealthPlugin from 'puppeteer-extra-plugin-stealth'
 import { supabase } from './supabase.js'
+import { getFastPath } from './fast-paths.js'
 
 // Stealth: hides "I'm a headless browser" fingerprints (webdriver flag,
 // missing plugins, ChromeDriver-only APIs, canvas/WebGL noise, etc.)
@@ -32,6 +33,51 @@ function humanDelay(minMs = 3000, maxMs = 5000) {
  */
 async function processOneUrl(cp, ctx, run, config, userPriceSel, userStockSel, counters) {
   const started = Date.now()
+
+  // ── Fast path: skip Playwright entirely if the competitor exposes a
+  // public JSON API (Eureka uses Algolia). Falls through to browser
+  // scraping on any failure so this can only make things better.
+  const fp = getFastPath(cp.url)
+  if (fp) {
+    try {
+      const result = await fp.fn(cp.url)
+      if (result?.price != null) {
+        await supabase.from('price_history').insert({
+          competitor_product_id: cp.id, price: result.price,
+          currency_code: cp.currency_code || 'KWD',
+          source: 'scrape', scrape_run_id: run.id,
+        })
+        if (result.inStock !== null && result.inStock !== undefined) {
+          await supabase.from('stock_history').insert({
+            competitor_product_id: cp.id, in_stock: result.inStock,
+            source: 'scrape', scrape_run_id: run.id,
+          })
+        }
+        const cpUpdate = { last_seen_at: new Date().toISOString() }
+        if (result.imageUrl) cpUpdate.image_url = result.imageUrl
+        await supabase.from('competitor_products').update(cpUpdate).eq('id', cp.id)
+        if (result.imageUrl && cp.product_id) {
+          await supabase.from('products')
+            .update({ image_url: result.imageUrl })
+            .eq('id', cp.product_id).is('image_url', null)
+        }
+        await supabase.from('scrape_jobs').insert({
+          scrape_run_id: run.id, competitor_product_id: cp.id,
+          status: 'ok', price_extracted: result.price,
+          in_stock_extracted: result.inStock ?? null,
+          error_message: null, duration_ms: Date.now() - started,
+        })
+        counters.scraped++
+        console.log(`[scraper] ✓ ${cp.name} → ${result.price} (fast-path: ${fp.name}, ${Date.now() - started}ms)`)
+        return
+      }
+      // Fast-path returned null → fall through to Playwright
+      console.log(`[scraper] fast-path ${fp.name} returned null for ${cp.name}, falling back to browser`)
+    } catch (e) {
+      console.log(`[scraper] fast-path ${fp.name} threw for ${cp.name}: ${e.message} — falling back`)
+    }
+  }
+
   let page = null
   // Collect JSON responses so we can rummage for prices if DOM extraction
   // fails. Eureka and other SPAs pull product data from JSON endpoints —

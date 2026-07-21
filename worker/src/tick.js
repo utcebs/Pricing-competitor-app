@@ -27,9 +27,9 @@ async function tick() {
   const { data: stuck } = await supabase
     .from('scrape_runs')
     .update({
-      status: 'error',
+      status: 'failed',
       finished_at: new Date().toISOString(),
-      error_message: 'stuck run auto-cleaned by tick (worker likely crashed mid-scrape)',
+      error_summary: 'stuck run auto-cleaned by tick (worker likely crashed mid-scrape)',
     })
     .eq('status', 'running')
     .lt('started_at', stuckCutoff)
