@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { Plus, Pencil, Trash2, Package, Upload, Sparkles, Link2Off, Link2, Search } from 'lucide-react'
 import { useTable, saveRow, deleteRow } from '../lib/db'
 import { useAuth } from '../lib/auth'
@@ -17,6 +17,29 @@ const slugify = (s = '') =>
     .replace(/[^a-z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '')
 
+// Extract the bare hostname from a URL ("https://www.xcite.com/p/1" → "xcite.com").
+// Returns null if it can't be parsed as a URL.
+const hostOf = (url = '') => {
+  try {
+    const u = new URL(url.includes('://') ? url : `https://${url}`)
+    return u.hostname.replace(/^www\./, '').toLowerCase()
+  } catch { return null }
+}
+// Normalise a competitor.domain the same way ("https://www.Xcite.com/" → "xcite.com").
+const normDomain = (d = '') =>
+  d.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '')
+
+// Find the competitor a URL belongs to by matching its hostname against
+// competitors.domain (handles subdomains either direction).
+const matchCompetitorByUrl = (url, competitors = []) => {
+  const host = hostOf(url)
+  if (!host) return null
+  return competitors.find(c => {
+    const d = normDomain(c.domain)
+    return d && (host === d || host.endsWith('.' + d) || d.endsWith('.' + host))
+  }) || null
+}
+
 export default function Products() {
   const { isManager, user } = useAuth()
   const { rows: products, loading, error, refresh } = useTable('products', { order: ['name', { ascending: true }] })
@@ -31,6 +54,12 @@ export default function Products() {
   const [findingId, setFindingId] = useState(null)
   const [toast, setToast] = useState('')
   const [findModal, setFindModal] = useState(null)   // { jobId, productName }
+  const [selected, setSelected] = useState(() => new Set())   // product ids ticked for bulk actions
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
+  const [bulkBusy, setBulkBusy] = useState(false)
+  // Collects URL hosts that don't match any competitor's domain, so the
+  // import can warn instead of silently dropping the URLs.
+  const ignoredUrlColsRef = useRef(new Set())
 
   // Filters
   const [q, setQ] = useState('')
@@ -75,6 +104,56 @@ export default function Products() {
   const capped = filtered.length > RENDER_CAP
   const visibleRows = capped ? filtered.slice(0, RENDER_CAP) : filtered
 
+  // ── Bulk selection ────────────────────────────────────────────
+  // Prune selection to what's currently visible so stale ids from a
+  // previous filter can't get silently deleted.
+  const visibleIds = useMemo(() => visibleRows.map(p => p.id), [visibleRows])
+  const selectedVisible = useMemo(
+    () => visibleIds.filter(id => selected.has(id)),
+    [visibleIds, selected]
+  )
+  const allVisibleSelected = visibleIds.length > 0 && selectedVisible.length === visibleIds.length
+  const toggleOne = (id) => setSelected(prev => {
+    const next = new Set(prev)
+    next.has(id) ? next.delete(id) : next.add(id)
+    return next
+  })
+  const toggleAllVisible = () => setSelected(prev => {
+    const next = new Set(prev)
+    if (allVisibleSelected) visibleIds.forEach(id => next.delete(id))
+    else visibleIds.forEach(id => next.add(id))
+    return next
+  })
+  const clearSelection = () => setSelected(new Set())
+
+  const bulkDelete = async () => {
+    const ids = visibleRows.filter(p => selected.has(p.id)).map(p => p.id)
+    if (!ids.length) { setBulkDeleteOpen(false); return }
+    setBulkBusy(true)
+    try {
+      // Same cascade as the single-row delete, batched via .in():
+      //   competitor_products (SET NULL in schema — must remove to avoid
+      //   orphaned active rows the scraper keeps hitting) and alert_rules
+      //   (polymorphic scope_ref_id pointer, no FK). Everything else CASCADEs
+      //   off products / competitor_products.
+      await supabase.from('competitor_products').delete().in('product_id', ids)
+      await supabase.from('alert_rules').delete()
+        .eq('scope', 'specific_product').in('scope_ref_id', ids)
+      const { error } = await supabase.from('products').delete().in('id', ids)
+      if (error) throw error
+      setToast(`Deleted ${ids.length} product${ids.length === 1 ? '' : 's'}.`)
+      setTimeout(() => setToast(''), 6000)
+      clearSelection()
+      setBulkDeleteOpen(false)
+      refresh(); refreshCps()
+    } catch (e) {
+      setToast('Bulk delete failed: ' + (e.message || String(e)))
+      setTimeout(() => setToast(''), 8000)
+    } finally {
+      setBulkBusy(false)
+    }
+  }
+
   const findUrlsFor = async (product) => {
     setFindingId(product.id); setToast('')
     const { data, error } = await supabase.from('url_find_jobs').insert({
@@ -111,7 +190,7 @@ export default function Products() {
         subtitle="Your catalogue. SKU, category, cost, min price."
         action={isManager && (
           <div className="flex items-center gap-2">
-            <Button variant="secondary" onClick={() => setBulkOpen(true)}><Upload size={15} /> Bulk import</Button>
+            <Button variant="secondary" onClick={() => { ignoredUrlColsRef.current = new Set(); setBulkOpen(true) }}><Upload size={15} /> Bulk import</Button>
             <Button onClick={openNew}><Plus size={15} /> Add product</Button>
           </div>
         )}
@@ -167,6 +246,23 @@ export default function Products() {
         </div>
       )}
 
+      {/* Bulk selection action bar */}
+      {isManager && selectedVisible.length > 0 && (
+        <div className="mb-3 flex items-center gap-3 px-4 py-2.5 bg-ink-900 text-white rounded-xl">
+          <span className="text-[12.5px] font-semibold">
+            {selectedVisible.length} selected
+          </span>
+          <button onClick={clearSelection}
+            className="text-[11.5px] text-white/70 hover:text-white font-medium">
+            Clear
+          </button>
+          <div className="flex-1" />
+          <Button variant="danger" size="sm" onClick={() => setBulkDeleteOpen(true)}>
+            <Trash2 size={14} /> Delete selected
+          </Button>
+        </div>
+      )}
+
       <Card>
         {loading ? (
           <LoadingBlock />
@@ -188,6 +284,18 @@ export default function Products() {
             <table className="w-full">
               <thead className="bg-canvas-100 border-b border-ink-200">
                 <tr>
+                  {isManager && (
+                    <Th className="w-10">
+                      <input
+                        type="checkbox"
+                        checked={allVisibleSelected}
+                        ref={el => { if (el) el.indeterminate = selectedVisible.length > 0 && !allVisibleSelected }}
+                        onChange={toggleAllVisible}
+                        title="Select all shown"
+                        className="align-middle cursor-pointer accent-brand-600"
+                      />
+                    </Th>
+                  )}
                   <Th>SKU</Th><Th>Name</Th><Th>Brand</Th><Th>Category</Th>
                   <Th className="text-right">Cost</Th>
                   <Th className="text-right">Min</Th>
@@ -201,7 +309,17 @@ export default function Products() {
                 {visibleRows.map(p => {
                   const image = p.image_url || cps.find(c => c.product_id === p.id && c.image_url)?.image_url || null
                   return (
-                  <tr key={p.id} className="hover:bg-canvas-100">
+                  <tr key={p.id} className={`hover:bg-canvas-100 ${selected.has(p.id) ? 'bg-brand-50/40' : ''}`}>
+                    {isManager && (
+                      <Td>
+                        <input
+                          type="checkbox"
+                          checked={selected.has(p.id)}
+                          onChange={() => toggleOne(p.id)}
+                          className="align-middle cursor-pointer accent-brand-600"
+                        />
+                      </Td>
+                    )}
                     <Td className="font-mono text-xs">{p.sku}</Td>
                     <Td>
                       <div className="flex items-center gap-3">
@@ -304,13 +422,23 @@ export default function Products() {
         }}
       />
 
+      <ConfirmDialog
+        open={bulkDeleteOpen}
+        onClose={() => setBulkDeleteOpen(false)}
+        title={`Delete ${selectedVisible.length} product${selectedVisible.length === 1 ? '' : 's'}?`}
+        message={`This permanently deletes ${selectedVisible.length} selected product${selectedVisible.length === 1 ? '' : 's'} along with every competitor URL linked to them, all captured price/stock history, pending repricing proposals, URL-find jobs, match suggestions, and product-scoped alert rules. This can't be undone.`}
+        confirmLabel={bulkBusy ? 'Deleting…' : 'Delete selected'}
+        busy={bulkBusy}
+        onConfirm={bulkDelete}
+      />
+
       <BulkUpload
         open={bulkOpen}
         onClose={() => setBulkOpen(false)}
         title="Bulk import products"
         templateFilename="products-template.csv"
         onRefreshTemplate={refreshCompetitors}
-        templateNote={`One column per active competitor (${activeCompetitors.length} today). Added a new competitor? Hit refresh below to regenerate the template.`}
+        templateNote={`Paste any competitor product URL into a url_* column — it's auto-linked to the right competitor by its web address, and appears on the Linked Items page immediately. There's one column per active competitor (${activeCompetitors.length} today) as a guide; added a new competitor? Hit refresh below to regenerate.`}
         templateHeaders={[
           'sku','name','brand','category_name','currency_code',
           'cost_price','min_price','current_price','target_margin',
@@ -335,7 +463,7 @@ export default function Products() {
             ...Object.fromEntries(activeCompetitors.map(c => [`url_${slugify(c.name)}`, ''])),
           },
         ]}
-        hint={`category_name must match a Category (leave blank to skip). currency_code must be a code in Currencies (KWD/USD/…). ${activeCompetitors.length > 0 ? `Optional url_<competitor> columns link the product to that competitor's URL during import — leave blank to skip.` : ''}`}
+        hint={`category_name must match a Category (leave blank to skip). currency_code must be a code in Currencies (KWD/USD/…). ${activeCompetitors.length > 0 ? `Any url_* column accepts a competitor URL — it's matched to a competitor by domain, so the column name doesn't have to be exact. URLs whose domain isn't a known competitor are reported, not linked.` : ''}`}
         transformRow={(row) => {
           if (!row.sku?.trim() || !row.name?.trim()) return { error: 'sku and name are required' }
           const cat = row.category_name?.trim()
@@ -347,11 +475,32 @@ export default function Products() {
             : null
           const num = (v) => (v === '' || v == null) ? null : Number(v)
           const bool = (v) => String(v || '').toLowerCase() === 'true' || v === '1'
-          // Extract any url_<competitor> columns that have a value
+          // Collect every URL cell (any url-ish column: the explicit
+          // url_<competitor> columns OR generic ones like `url`, `product_url`,
+          // `link`). Each URL is auto-assigned to a competitor by matching its
+          // web address against competitors.domain — so a plain `url` column
+          // "just works" and the link shows up on the Linked Items page.
+          // Falls back to the column's named competitor if the domain can't be
+          // resolved; otherwise the URL's host is flagged for the result note.
+          const slugToComp = new Map(activeCompetitors.map(c => [`url_${slugify(c.name)}`, c]))
           const manualLinks = []
-          for (const c of activeCompetitors) {
-            const val = row[`url_${slugify(c.name)}`]?.trim()
-            if (val) manualLinks.push({ competitor_id: c.id, url: val })
+          const seenUrls = new Set()
+          for (const key of Object.keys(row)) {
+            const k = key.toLowerCase().trim()
+            const isExplicit = slugToComp.has(key)
+            const looksUrlish = isExplicit || k === 'url' || k.startsWith('url') ||
+              ['link', 'website', 'product_url', 'competitor_url'].includes(k)
+            if (!looksUrlish) continue
+            const val = row[key]?.trim()
+            if (!val || seenUrls.has(val)) continue
+            const comp = matchCompetitorByUrl(val, activeCompetitors) || slugToComp.get(key) || null
+            if (comp) {
+              manualLinks.push({ competitor_id: comp.id, url: val })
+              seenUrls.add(val)
+            } else {
+              // Couldn't map this URL to any competitor — surface it, don't drop silently.
+              ignoredUrlColsRef.current.add(hostOf(val) || val)
+            }
           }
           return {
             payload: {
@@ -403,13 +552,17 @@ export default function Products() {
           }
 
           refresh(); refreshCps()
+          const ignored = [...ignoredUrlColsRef.current]
+          const parts = []
+          if (linksInserted > 0) parts.push(`Also linked ${linksInserted} competitor URL${linksInserted === 1 ? '' : 's'} — they now show on the Linked Items page.`)
+          if (ignored.length) {
+            parts.push(`⚠️ ${ignored.length} URL${ignored.length === 1 ? '' : 's'} couldn't be linked — the web address didn't match any competitor's domain (${ignored.join(', ')}). Add ${ignored.length === 1 ? 'it' : 'them'} as a Competitor first (Competitors page), then re-import.`)
+          }
           return {
             inserted: data.length,
             failed: payloads.length - data.length,
             errors: linkErrors,
-            note: linksInserted > 0
-              ? `Also linked ${linksInserted} competitor URL${linksInserted === 1 ? '' : 's'}.`
-              : undefined,
+            note: parts.length ? parts.join(' ') : undefined,
           }
         }}
       />
@@ -490,12 +643,20 @@ function ProductForm({ open, product, categories, currencies, competitors = [], 
       // Insert manual competitor URLs the user entered inline (both for
       // new AND existing products — edit mode users can add more here).
       let manualLinksInserted = 0
+      // Resolve each row's competitor: use the picked one, else auto-detect
+      // from the URL's domain so a bare URL still links correctly.
       const validLinks = manualLinks
-        .map(r => ({ ...r, url: r.url?.trim() }))
+        .map(r => {
+          const url = r.url?.trim()
+          const competitor_id = r.competitor_id
+            ? Number(r.competitor_id)
+            : matchCompetitorByUrl(url, competitors)?.id || null
+          return { competitor_id, url }
+        })
         .filter(r => r.competitor_id && r.url)
       if (validLinks.length && data?.id) {
         const linkRows = validLinks.map(r => ({
-          competitor_id: Number(r.competitor_id),
+          competitor_id: r.competitor_id,
           product_id: data.id,
           url: r.url,
           name: form.name || r.url,   // NOT NULL; scraper will refine on first tick
@@ -675,7 +836,7 @@ function ProductForm({ open, product, categories, currencies, competitors = [], 
               <div key={i} className="flex items-center gap-2">
                 <select className={`${selectCls} w-48 flex-shrink-0`}
                   value={row.competitor_id} onChange={e => setLink(i, 'competitor_id', e.target.value)}>
-                  <option value="">Competitor…</option>
+                  <option value="">Auto-detect from URL</option>
                   {competitors.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
                 <input type="url" className={`${inputCls} flex-1`}

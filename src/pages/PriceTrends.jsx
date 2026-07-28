@@ -17,6 +17,34 @@ import {
 // Warm sophisticated palette — each competitor gets a stable line colour
 const COMPETITOR_COLORS = ['#b1863a', '#0f766e', '#7c2d12', '#4c1d95', '#0369a1', '#65a30d', '#a21caf', '#c2410c']
 
+// Custom tooltip: the default recharts tooltip colours each row's TEXT with the
+// series line colour, which is unreadable for dark palette entries on the dark
+// tooltip background. Here we keep the colour as a dot and render all text light.
+function ChartTooltip({ active, payload, label }) {
+  if (!active || !payload || !payload.length) return null
+  return (
+    <div style={{
+      background: '#0c0a09', border: 'none', borderRadius: '10px',
+      color: '#fafaf9', fontSize: '12px', padding: '10px 14px',
+      boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
+    }}>
+      <div style={{ color: '#d6d3d1', marginBottom: '6px', fontSize: '11px' }}>{label}</div>
+      {payload.map((entry) => (
+        <div key={entry.dataKey} style={{ display: 'flex', alignItems: 'center', gap: '8px', lineHeight: 1.6 }}>
+          <span style={{
+            width: '8px', height: '8px', borderRadius: '9999px',
+            background: entry.color, flexShrink: 0, display: 'inline-block',
+          }}/>
+          <span style={{ color: '#fafaf9' }}>{entry.name}</span>
+          <span style={{ color: '#fafaf9', marginLeft: 'auto', fontVariantNumeric: 'tabular-nums' }}>
+            {entry.value != null ? `KD ${Number(entry.value).toFixed(3)}` : '—'}
+          </span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 export default function PriceTrends() {
   const { rows: products, loading: pL } = useTable('products', { order: ['name', { ascending: true }] })
   const { rows: cps }                    = useTable('competitor_products')
@@ -339,14 +367,7 @@ export default function PriceTrends() {
                         tickFormatter={v => Number(v).toFixed(1)}
                         domain={['auto', 'auto']}
                       />
-                      <Tooltip
-                        contentStyle={{
-                          background: '#0c0a09', border: 'none', borderRadius: '10px',
-                          color: '#fafaf9', fontSize: '12px', padding: '10px 14px',
-                        }}
-                        formatter={v => v != null ? `KD ${Number(v).toFixed(3)}` : '—'}
-                        labelStyle={{ color: '#d6d3d1', marginBottom: '4px', fontSize: '11px' }}
-                      />
+                      <Tooltip content={<ChartTooltip />} />
                       <Legend wrapperStyle={{ fontSize: 11, paddingTop: '12px' }} iconType="line" />
                       {seriesKeys.map((k, i) => {
                         const isYou = k === YOU_KEY
