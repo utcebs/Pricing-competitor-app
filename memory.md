@@ -670,3 +670,38 @@ ADMIN         Repricing · Integrations · Users (admin only)
 - Match Review section 2 (pg_trgm suggestions) is always empty because auto-URL-finder always sets product_id on insert. Left in for future orphan-URL discovery workflows.
 
 _Last updated: 2026-07-17 — parallel scraper, shard workflows, DB indexes, Realtime, route prefetch, ErrorBoundary, brand-aware URL finder._
+
+---
+
+## 23. 2026-07-28 — bulk-delete, domain auto-linking, tooltip fix + bulk-import data lessons
+
+Session driven by a user bulk-importing 500 products and finding none of them linked to competitors. Root cause was **data**, not code — but several real code fixes came out of it. All changes in `src/pages/Products.jsx` + `src/pages/PriceTrends.jsx`.
+
+### A. PriceTrends tooltip contrast (commit `b492ae4`)
+Recharts colours each tooltip row's TEXT with the series line colour. On the dark tooltip bg (`#0c0a09`), dark palette entries (teal `#0f766e`, wine `#7c2d12`) were invisible. Fix: custom `ChartTooltip` component in `PriceTrends.jsx` — keeps the series colour as a small dot, renders all label/value text in light (`#fafaf9`). Replaced the `<Tooltip contentStyle=… formatter=…>` with `<Tooltip content={<ChartTooltip/>} />`.
+
+### B. Products bulk delete (commit `b492ae4`)
+`Products.jsx` — multi-select checkboxes (header "select all shown" with indeterminate state, per-row checkbox), a dark action bar ("N selected · Clear · Delete selected"), and a `ConfirmDialog`. `bulkDelete()` batches the SAME cascade as the single-row delete via `.in()`: `competitor_products` (schema SET NULLs product_id → must delete to avoid orphaned active rows the scraper hits) → product-scoped `alert_rules` (polymorphic `scope_ref_id`, no FK) → `products`. Selection is pruned to currently-visible rows so a stale filtered selection can't delete off-screen rows.
+
+### C. Domain-based auto-linking — the big one (commits `aceb35a`, value-based; `2f9ceab`, dedupe)
+Problem: the Products bulk importer only linked URLs from columns named exactly `url_<competitor_slug>` (e.g. `url_xcite`). A generic `url` column was silently ignored → 0 links, no error.
+
+Fixes, all in `Products.jsx`:
+- **Module helpers**: `hostOf(url)` (bare hostname, strips www), `normDomain(d)` (normalises `competitor.domain`), `matchCompetitorByUrl(url, competitors)` (matches a URL to a competitor by domain, handles subdomains either direction).
+- **Value-based detection** in bulk `transformRow`: ANY cell holding a real `http(s)://` URL is a link candidate regardless of column name (`KNOWN_NON_URL` set skips sku/name/price/description/image_url/own_url so those never link). Each URL is auto-assigned to a competitor by domain; explicit `url_<slug>` column is a fallback. URLs whose domain matches no competitor are reported (`ignoredUrlColsRef`), not dropped silently.
+- **Same domain-detect added to the inline Add/Edit Product modal** — competitor dropdown default is now "Auto-detect from URL" (leave blank → derived from the URL's domain).
+- **Dedupe by (competitor_id, url)** before the `competitor_products` upsert. A batch with repeated `(competitor_id,url)` pairs throws Postgres **"ON CONFLICT DO UPDATE command cannot affect row a second time"** and fails the ENTIRE link step silently. Now: first product to claim a URL keeps it, rest are counted as `dupUrls` and reported. **New gotcha worth remembering.**
+
+### D. THE DATA LESSON (why the user's imports kept failing)
+The user's `competitor data.csv` had 500 rows but only **2 distinct URLs total** — the same Xcite + Eureka URL on every row. **A `competitor_products.url` is UNIQUE per competitor** — one URL = one product page. So the same URL cannot link 500 products; the max links that file could ever create was 2 (both landed on SKU-0001). No code change fixes this. For N products you need N distinct real per-product competitor URLs. The 3rd upload (`competitor data.csv` v-with-3-distinct-URLs-each) finally produced 1,500 links (500×3). Prices in the DB (cost 5 / min 10 / current 12) were the tell for which CSV was actually uploaded.
+
+### E. Scraper throughput for bulk cold-starts (diagnosed, not changed)
+"Scrape new items" creates **one `scrape_runs` row per URL** (`target_cp_id` set = single-URL targeted scrape). `tick.js` processes runs **sequentially, max 5 per shard per tick**, 3 shards (`competitor_id % 3`), `*/5` cron → **~15 URLs / 5 min ideal ≈ 180/hr**. So ~1,000 URLs ≈ **5.5 h ideal**, longer in practice because GitHub Actions scheduled crons are throttled on this public repo (90-min gaps observed). The 5-per-shard cap (`.slice(0,5)` in `tick.js`) is the hard limiter — system is tuned for incremental updates, not a 1,500-URL cold start. To speed a bulk: raise the cap, spam TriggerTick, or run the long-running `worker/src/index.js` continuously (Render/Railway/local) to drain back-to-back (~1-2 h).
+
+### F. Bulk data-purge pattern (operational)
+Deleted the test batch several times via a throwaway Node script (NOT the UI): `@supabase/supabase-js` client + `signInWithPassword('admin@test.com','P@ssw0rd')` (admin RLS allows the writes), select batch by `created_at >= '2026-07-28'`, **hard-guard: abort unless exactly 500 rows AND every SKU matches `/^SKU-\d+$/`**, then chunked `.in()` deletes of competitor_products → alert_rules → url_find_jobs → products. Run the script from INSIDE the project dir (needs local `node_modules` to resolve the import); clean it up after. The 5 real products (Dyson, Philips Oneblade, JBL Flip 7, Samsung S26 Ultra, Babyliss) + their 14 links are the known-good baseline.
+
+### G. Commit identity note
+Commits this session were authored as **Jeswin Davis / jeswin@utc.com.kw** (git auto-detected), NOT `utcebs`. User may want the identity set to `utcebs` for consistency with the GitHub account.
+
+_Last updated: 2026-07-28 — bulk delete, domain-based URL auto-linking (value-based + dedupe), PriceTrends tooltip contrast fix; documented the unique-URL-per-competitor data rule and bulk-scrape throughput ceiling._
