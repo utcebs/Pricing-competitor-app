@@ -22,7 +22,8 @@ export default function Comparison() {
   const { rows: competitors, loading: cL, error: cErr, refresh: refreshCompetitors } = useTable('competitors', { eq: ['is_active', true], order: ['name', { ascending: true }] })
   const { rows: cps,         loading: lL, error: lErr, refresh: refreshCps } = useTable('competitor_products')
 
-  const [latestPrices, setLatestPrices] = useState({})   // { competitor_product_id: { price, captured_at, in_stock } }
+  const [latestPrices, setLatestPrices] = useState({})   // { competitor_product_id: { price, captured_at } }
+  const [latestStock, setLatestStock] = useState({})     // { competitor_product_id: boolean in_stock }
   const [priceLoading, setPriceLoading] = useState(false)
   const [priceErr, setPriceErr] = useState('')
   const [refreshTick, setRefreshTick] = useState(0)   // bump to re-run the price query
@@ -56,6 +57,26 @@ export default function Comparison() {
           if (!seen[row.competitor_product_id]) seen[row.competitor_product_id] = row
         }
         setLatestPrices(seen)
+      })
+  }, [cpIds.join(','), refreshTick])
+
+  // Pull latest STOCK status for every competitor_product (separate table).
+  // Used only to colour prices — an out-of-stock item still shows its price.
+  useEffect(() => {
+    if (cpIds.length === 0) { setLatestStock({}); return }
+    const from = new Date(); from.setDate(from.getDate() - 60)
+    supabase.from('stock_history')
+      .select('competitor_product_id, in_stock, captured_at')
+      .in('competitor_product_id', cpIds)
+      .gte('captured_at', from.toISOString())
+      .order('captured_at', { ascending: false })
+      .then(({ data, error }) => {
+        if (error) return   // stock is a nice-to-have; never block the grid
+        const seen = {}
+        for (const row of (data || [])) {
+          if (!(row.competitor_product_id in seen)) seen[row.competitor_product_id] = row.in_stock
+        }
+        setLatestStock(seen)
       })
   }, [cpIds.join(','), refreshTick])
 
@@ -379,15 +400,21 @@ export default function Comparison() {
                       const cellPct = pc.yourPrice != null
                         ? ((pc.yourPrice - Number(px)) / Number(px)) * 100
                         : null
+                      const oos = latestStock[match.cp.id] === false
                       return (
                         <Td key={c.id} className="text-right tabular-nums">
                           <div className="flex flex-col items-end gap-0.5">
                             <a href={match.cp.url} target="_blank" rel="noopener noreferrer"
-                              className="text-ink-800 hover:text-brand-700 inline-flex items-center gap-1 group">
+                              title={oos ? 'Out of stock — price shown is the last seen while listed' : undefined}
+                              className={`inline-flex items-center gap-1 group ${
+                                oos ? 'text-amber-600' : 'text-ink-800 hover:text-brand-700'
+                              }`}>
                               {Number(px).toFixed(3)}
                               <ExternalLink size={9} className="opacity-0 group-hover:opacity-100 transition-opacity" />
                             </a>
-                            {cellPct != null && <MiniGap pct={cellPct} />}
+                            {oos
+                              ? <span className="text-[9px] font-semibold uppercase tracking-wide text-amber-600">out of stock</span>
+                              : cellPct != null && <MiniGap pct={cellPct} />}
                           </div>
                         </Td>
                       )
@@ -411,6 +438,9 @@ export default function Comparison() {
         </span>
         <span className="inline-flex items-center gap-1.5">
           <span className="w-2 h-2 rounded-full bg-ink-300"/> Within 1%
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <span className="w-2 h-2 rounded-full bg-amber-500"/> <span className="text-amber-600 font-semibold">Amber price</span> = out of stock
         </span>
       </div>
     </div>

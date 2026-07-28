@@ -137,6 +137,8 @@ async function processOneUrl(cp, ctx, run, config, userPriceSel, userStockSel, c
         if (p != null) { price = p; matchedSelector = 'network-json'; break }
       }
     }
+    // Normalise minor-unit (fils) prices to KWD. See normalizeScrapedPrice.
+    price = normalizeScrapedPrice(price, cp.url)
     const inStock = await extractStock(page, userStockSel)
     const imageUrl = await extractImage(page, cp.url)
     await page.close(); page = null
@@ -511,6 +513,24 @@ async function extractStock(page, userSelector) {
     } catch { /* try next */ }
   }
   return null
+}
+
+// Xcite (Next.js) renders KWD prices with the 3-digit fils part in a
+// separate DOM node, so textContent / __NEXT_DATA__ often yields the value
+// in FILS (minor units) rather than KWD — e.g. 4150 = KD 4.150, 5400 = KD
+// 5.400, 31550 = KD 31.550. KWD has exactly 3 decimal places, so an INTEGER
+// value >= 1000 coming from Xcite is fils and must be divided by 1000.
+// (A price scraped as a proper decimal like 199.900 is left untouched.
+//  Genuine >= 1000 KWD items are rare in this catalogue; if any appear,
+//  set scrape_config.priceInFils=false or add a per-URL exception.)
+function normalizeScrapedPrice(price, url) {
+  if (price == null) return price
+  let host = ''
+  try { host = new URL(url).hostname.replace(/^www\./, '').toLowerCase() } catch { /* bad url */ }
+  if (host === 'xcite.com' && Number.isInteger(price) && price >= 1000) {
+    return price / 1000
+  }
+  return price
 }
 
 function parsePrice(text) {
