@@ -92,7 +92,7 @@ async function processOneUrl(cp, ctx, run, config, userPriceSel, userStockSel, c
         const ct = (res.headers()['content-type'] || '').toLowerCase()
         if (!ct.includes('json')) return
         const body = await res.json().catch(() => null)
-        if (body && typeof body === 'object') jsonResponses.push(body)
+        if (body && typeof body === 'object') jsonResponses.push({ url: res.url(), body })
       } catch { /* ignore per-response errors */ }
     })
     await page.goto(cp.url, { waitUntil: 'domcontentloaded', timeout: 45_000 })
@@ -129,16 +129,37 @@ async function processOneUrl(cp, ctx, run, config, userPriceSel, userStockSel, c
       // still be interpolating text into related bindings.
       await page.waitForTimeout(isAngular ? 1500 : 800)
     }
+    // Soft-404 guard: dead product URLs (wrong/expired SKU) still render the
+    // header + recommendation carousels, so price extraction would happily
+    // return a promoted item's price. Bail early if the page is a not-found
+    // shell so we record "no price" instead of a bogus carousel value.
+    const pageTitle = (await page.title().catch(() => '')) || ''
+    if (/404|not\s*found|page\s*not\s*found/i.test(pageTitle)) {
+      await page.close(); page = null
+      await supabase.from('scrape_jobs').insert({
+        scrape_run_id: run.id, competitor_product_id: cp.id, status: 'not_found',
+        error_message: `Product page not found (title: "${pageTitle.slice(0, 80)}") — URL likely invalid/expired`,
+        duration_ms: Date.now() - started,
+      })
+      await supabase.from('competitor_products').update({ last_seen_at: new Date().toISOString() }).eq('id', cp.id)
+      counters.notFound++
+      console.log(`[scraper] ✗ ${cp.name}: soft-404, skipped`)
+      return
+    }
+
     let { price, matchedSelector, htmlSample } = await extractPrice(page, userPriceSel)
-    // Fallback: rummage through any JSON responses we collected during load
+    // Fallback: rummage through any JSON responses we collected during load.
+    // CRITICAL: skip page-level carousels / homepage / flyer data — those hold
+    // OTHER products' prices (recommendations, "you may also like"), and a
+    // greedy walk would return e.g. the promoted iPhone's price for every
+    // product. See findPriceInObject's SKIP_KEYS for the in-object guard.
     if (price == null && jsonResponses.length > 0) {
-      for (const body of jsonResponses) {
+      for (const { url, body } of jsonResponses) {
+        if (/\/(flyer|home|homepage)\b|\/en-[A-Z]{2}\.json|\/ar-[A-Z]{2}\.json/i.test(url)) continue
         const p = findPriceInObject(body)
         if (p != null) { price = p; matchedSelector = 'network-json'; break }
       }
     }
-    // Normalise minor-unit (fils) prices to KWD. See normalizeScrapedPrice.
-    price = normalizeScrapedPrice(price, cp.url)
     const inStock = await extractStock(page, userStockSel)
     const imageUrl = await extractImage(page, cp.url)
     await page.close(); page = null
@@ -448,10 +469,24 @@ async function extractPrice(page, userSelector) {
   }
 }
 
+// Keys whose sub-tree holds OTHER products (recommendations, carousels,
+// "you may also like", accessories). Xcite/Next.js product pages embed these,
+// so a naive walk returns the promoted product's price (e.g. iPhone @ 399.9)
+// for every URL. Never descend into these — only the page's OWN product counts.
+const RECO_KEYS = new Set([
+  'productcarousel', 'carousel', 'carousels', 'recommendations', 'recommendation',
+  'relatedproducts', 'related', 'youmayalsolike', 'similar', 'similarproducts',
+  'crosssell', 'crosssells', 'upsell', 'upsells', 'accessories', 'alsobought',
+  'frequentlyboughttogether', 'recentlyviewed', 'components', 'slots', 'widgets',
+  'suggestions', 'sponsored', 'bundle', 'bundles',
+])
+
 /**
  * Recursively walk a Next.js page-data blob looking for a plausible
  * product price. Keys tried in order of specificity. Values are cross-
  * checked with parsePrice to filter out storage sizes / ratings / etc.
+ * Skips recommendation/carousel sub-trees (see RECO_KEYS) so it can only
+ * return the page's OWN product price, never a recommended item's.
  */
 function findPriceInObject(obj, depth = 0) {
   if (depth > 10 || obj == null) return null
@@ -486,14 +521,16 @@ function findPriceInObject(obj, depth = 0) {
       }
     }
   }
-  // Recurse into arrays and children
+  // Recurse into arrays and children — but NEVER into recommendation/carousel
+  // sub-trees (they belong to other products).
   if (Array.isArray(obj)) {
     for (const item of obj) {
       const p = findPriceInObject(item, depth + 1)
       if (p != null) return p
     }
   } else {
-    for (const val of Object.values(obj)) {
+    for (const [key, val] of Object.entries(obj)) {
+      if (RECO_KEYS.has(key.toLowerCase())) continue
       if (val && typeof val === 'object') {
         const p = findPriceInObject(val, depth + 1)
         if (p != null) return p
@@ -513,24 +550,6 @@ async function extractStock(page, userSelector) {
     } catch { /* try next */ }
   }
   return null
-}
-
-// Xcite (Next.js) renders KWD prices with the 3-digit fils part in a
-// separate DOM node, so textContent / __NEXT_DATA__ often yields the value
-// in FILS (minor units) rather than KWD — e.g. 4150 = KD 4.150, 5400 = KD
-// 5.400, 31550 = KD 31.550. KWD has exactly 3 decimal places, so an INTEGER
-// value >= 1000 coming from Xcite is fils and must be divided by 1000.
-// (A price scraped as a proper decimal like 199.900 is left untouched.
-//  Genuine >= 1000 KWD items are rare in this catalogue; if any appear,
-//  set scrape_config.priceInFils=false or add a per-URL exception.)
-function normalizeScrapedPrice(price, url) {
-  if (price == null) return price
-  let host = ''
-  try { host = new URL(url).hostname.replace(/^www\./, '').toLowerCase() } catch { /* bad url */ }
-  if (host === 'xcite.com' && Number.isInteger(price) && price >= 1000) {
-    return price / 1000
-  }
-  return price
 }
 
 function parsePrice(text) {
