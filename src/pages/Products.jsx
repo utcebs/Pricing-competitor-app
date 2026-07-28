@@ -475,30 +475,36 @@ export default function Products() {
             : null
           const num = (v) => (v === '' || v == null) ? null : Number(v)
           const bool = (v) => String(v || '').toLowerCase() === 'true' || v === '1'
-          // Collect every URL cell (any url-ish column: the explicit
-          // url_<competitor> columns OR generic ones like `url`, `product_url`,
-          // `link`). Each URL is auto-assigned to a competitor by matching its
-          // web address against competitors.domain — so a plain `url` column
-          // "just works" and the link shows up on the Linked Items page.
-          // Falls back to the column's named competitor if the domain can't be
-          // resolved; otherwise the URL's host is flagged for the result note.
+          // Collect every URL cell and auto-assign it to a competitor by matching
+          // its web address against competitors.domain — so the link shows up on
+          // the Linked Items page with zero column-naming rules. Detection is
+          // VALUE-based: any cell holding a real http(s):// URL is a candidate,
+          // whatever the column is called ("url", "Product URL", "xcite link"…).
+          // The explicit url_<competitor> columns still work as a domain fallback.
+          // Known product fields are skipped so a description/image never links.
           const slugToComp = new Map(activeCompetitors.map(c => [`url_${slugify(c.name)}`, c]))
+          const KNOWN_NON_URL = new Set([
+            'sku', 'name', 'brand', 'category_name', 'currency_code', 'cost_price',
+            'min_price', 'current_price', 'target_margin', 'is_own_brand', 'is_active',
+            'description', 'image_url', 'own_url', 'id',
+          ])
           const manualLinks = []
           const seenUrls = new Set()
           for (const key of Object.keys(row)) {
             const k = key.toLowerCase().trim()
-            const isExplicit = slugToComp.has(key)
-            const looksUrlish = isExplicit || k === 'url' || k.startsWith('url') ||
-              ['link', 'website', 'product_url', 'competitor_url'].includes(k)
-            if (!looksUrlish) continue
+            if (KNOWN_NON_URL.has(k)) continue
             const val = row[key]?.trim()
             if (!val || seenUrls.has(val)) continue
+            const valIsUrl = /^https?:\/\//i.test(val)
+            const colIsUrlish = slugToComp.has(key) || k === 'url' || k.startsWith('url') ||
+              ['link', 'website', 'product_url', 'competitor_url', 'competitor_link'].includes(k)
+            if (!valIsUrl && !colIsUrlish) continue   // not a URL cell — ignore
             const comp = matchCompetitorByUrl(val, activeCompetitors) || slugToComp.get(key) || null
             if (comp) {
               manualLinks.push({ competitor_id: comp.id, url: val })
               seenUrls.add(val)
-            } else {
-              // Couldn't map this URL to any competitor — surface it, don't drop silently.
+            } else if (valIsUrl) {
+              // A real URL that matches no competitor — surface it, don't drop silently.
               ignoredUrlColsRef.current.add(hostOf(val) || val)
             }
           }
