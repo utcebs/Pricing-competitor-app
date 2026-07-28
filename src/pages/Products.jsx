@@ -533,10 +533,20 @@ export default function Products() {
           const { data, error } = await supabase.from('products').insert(cleaned).select()
           if (error) { refresh(); return { inserted: 0, failed: payloads.length, errors: [error.message] } }
 
-          // Build the flat list of competitor_products to insert
+          // Build the flat list of competitor_products to insert, DEDUPED by
+          // (competitor_id, url). A competitor URL is unique per competitor, so
+          // the same URL can only belong to ONE product. Sending duplicates in
+          // one upsert makes Postgres throw "ON CONFLICT cannot affect row a
+          // second time" and fails the WHOLE batch — so we keep the first
+          // product to claim each URL and report the rest as duplicates.
           const linkRows = []
+          const claimed = new Map()   // "competitor_id|url" → product name that claimed it
+          let dupUrls = 0
           data.forEach((prod, i) => {
             for (const l of linksByIdx[i]) {
+              const dedupeKey = `${l.competitor_id}|${l.url}`
+              if (claimed.has(dedupeKey)) { dupUrls++; continue }
+              claimed.set(dedupeKey, prod.name)
               linkRows.push({
                 competitor_id: l.competitor_id,
                 product_id: prod.id,
@@ -561,6 +571,7 @@ export default function Products() {
           const ignored = [...ignoredUrlColsRef.current]
           const parts = []
           if (linksInserted > 0) parts.push(`Also linked ${linksInserted} competitor URL${linksInserted === 1 ? '' : 's'} — they now show on the Linked Items page.`)
+          if (dupUrls > 0) parts.push(`⚠️ ${dupUrls} URL${dupUrls === 1 ? '' : 's'} were repeated across multiple products and skipped — a competitor URL is unique to one product page, so each product needs its own URL.`)
           if (ignored.length) {
             parts.push(`⚠️ ${ignored.length} URL${ignored.length === 1 ? '' : 's'} couldn't be linked — the web address didn't match any competitor's domain (${ignored.join(', ')}). Add ${ignored.length === 1 ? 'it' : 'them'} as a Competitor first (Competitors page), then re-import.`)
           }
