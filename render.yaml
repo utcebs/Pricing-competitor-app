@@ -29,7 +29,7 @@ services:
     rootDir: worker
     autoDeploy: true       # Redeploy on every push to main
     buildCommand: |
-      npm ci --omit=dev=false
+      npm ci
       npx playwright install --with-deps chromium
     startCommand: node src/index.js
     envVars:

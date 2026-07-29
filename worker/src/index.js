@@ -32,16 +32,20 @@ import { setupBullMQ } from './queue.js'
 
 async function tick() {
   console.log('[worker] tick @', new Date().toISOString())
+  let processed = 0
   try {
     const { data: queued } = await supabase
       .from('scrape_runs')
       .select('*')
       .eq('status', 'queued')
       .order('created_at', { ascending: true })
-      .limit(5)
+      .limit(10)
 
+    // Sequential: one runScrapeJob (→ one browser) at a time keeps memory
+    // flat on the 512 MB Render Starter plan even with a big backlog.
     for (const run of (queued || [])) {
       await runScrapeJob(run)
+      processed++
     }
 
     await checkAlertRules()
@@ -50,6 +54,7 @@ async function tick() {
   } catch (e) {
     console.error('[worker] tick error', e)
   }
+  return processed
 }
 
 // Cron 1 — scheduled scrape fanout every 6 hours
@@ -79,8 +84,20 @@ cron.schedule('0 3 * * *', async () => {
 // loop above handles everything.
 setupBullMQ()
 
-// Kick off
-tick()
-setInterval(tick, 60_000)
+// Kick off — self-scheduling loop with a re-entrancy guard.
+// Runs back-to-back while there's a backlog (drains fast), then idles at
+// 60s once the queue is empty. A single in-flight tick guarantees only one
+// Playwright browser is ever open, so memory stays flat on Render Starter.
+let ticking = false
+async function loop() {
+  if (ticking) { setTimeout(loop, 5_000); return }
+  ticking = true
+  let processed = 0
+  try { processed = await tick() } catch (e) { console.error('[worker] loop error', e) }
+  finally { ticking = false }
+  // Busy → poll again almost immediately; idle → back off to 60s.
+  setTimeout(loop, processed > 0 ? 500 : 60_000)
+}
+loop()
 
 console.log('[worker] started · REDIS_URL:', process.env.REDIS_URL ? 'yes' : 'no')
