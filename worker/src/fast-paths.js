@@ -79,11 +79,68 @@ async function fastScrapeEureka(url) {
   }
 }
 
+// ── Xcite (xcite.com) ─────────────────────────────────────────────
+// Xcite runs Next.js and server-renders the FULL product record into the
+// page's <script id="__NEXT_DATA__"> at props.pageProps.meta.product. So a
+// single plain HTML fetch gives the authoritative price AND stock — no
+// browser, no Algolia proxy (which is WAF-gated), no fragile DOM selector,
+// and no risk of picking up a recommendation-carousel price.
+//
+//   meta.product.price  = { value, valueUnmodified, currency, formattedPrice }
+//   meta.product.status = "InStock" | "OutOfStock" | "Discontinued" | ...
+// Invalid/expired SKU URLs have no price and status "Discontinued" → we
+// return null so the caller records not_found (never a wrong number).
+const XCITE_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+
+function extractXciteImage(media) {
+  try {
+    const s = JSON.stringify(media ?? '')
+    const m = s.match(/https?:\/\/[^"'\\]*amplience[^"'\\]*/i) ||
+              s.match(/https?:\/\/[^"'\\]+\.(?:jpg|jpeg|png|webp)/i)
+    return m ? m[0] : null
+  } catch { return null }
+}
+
+async function fastScrapeXcite(url) {
+  const res = await fetch(url, {
+    headers: {
+      'user-agent': XCITE_UA,
+      accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'accept-language': 'en-US,en;q=0.9,ar;q=0.8',
+    },
+    signal: AbortSignal.timeout(15_000),
+  })
+  if (!res.ok) return null
+  const html = await res.text()
+  const m = html.match(/<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/)
+  if (!m) return null
+
+  let product
+  try { product = JSON.parse(m[1])?.props?.pageProps?.meta?.product } catch { return null }
+  if (!product) return null
+
+  const raw = product.price?.value
+  const price = typeof raw === 'number' ? raw : parseFloat(raw)
+  if (!isFinite(price) || price <= 0) return null   // discontinued / no price
+
+  const status = String(product.status || '')
+  const inStock = /instock/i.test(status) ? true
+    : /(outofstock|out[_-]?of[_-]?stock|soldout|discontinued|unavailable)/i.test(status) ? false
+      : null
+
+  return { price, inStock, imageUrl: extractXciteImage(product.media), name: product.name || null }
+}
+
 const FAST_PATHS = [
   {
     name: 'eureka-algolia',
     match: (url) => /(?:^|\.)eureka\.com\.kw/i.test(new URL(url).hostname),
     fn: fastScrapeEureka,
+  },
+  {
+    name: 'xcite-nextdata',
+    match: (url) => /(?:^|\.)xcite\.com$/i.test(new URL(url).hostname),
+    fn: fastScrapeXcite,
   },
 ]
 
