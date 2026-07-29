@@ -705,3 +705,47 @@ Deleted the test batch several times via a throwaway Node script (NOT the UI): `
 Commits this session were authored as **Jeswin Davis / jeswin@utc.com.kw** (git auto-detected), NOT `utcebs`. User may want the identity set to `utcebs` for consistency with the GitHub account.
 
 _Last updated: 2026-07-28 — bulk delete, domain-based URL auto-linking (value-based + dedupe), PriceTrends tooltip contrast fix; documented the unique-URL-per-competitor data rule and bulk-scrape throughput ceiling._
+
+---
+
+## 24. 2026-07-29/30 — Render migration, browser-free fast-paths for ALL competitors, OOM fix
+
+Big infrastructure + scraping-accuracy session. The scraper now runs continuously on Render and every competitor is scraped via a direct API/SSR fast-path (no Playwright in normal operation).
+
+### A. Scraping moved off GitHub Actions → Render ($7/mo continuous worker)
+- **Why:** GitHub Actions `*/5` cron is "best effort" — observed firing only ~1×/hr with multi-hour overnight gaps (runs dropped, all "success", just not started). Combined with the 5-per-tick cap → ~15 URLs/hr, appeared "stopped". This is the root cause of "scraping stopped at night".
+- **Render setup:** `render.yaml` → Background Worker, Starter plan, Frankfurt, runs `worker/src/index.js` (the long-running loop). Auto-deploys on push to `main`. Env vars: `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` (service role, from Supabase dashboard).
+- **CRITICAL Render+Playwright gotcha:** native Node runtime CAN'T `apt-get` Chromium's system libs, so `playwright install --with-deps` fails the build. Fix: build from the **official Playwright Docker image**. `worker/Dockerfile` = `FROM mcr.microsoft.com/playwright:v1.61.1-jammy` (tag MUST match the `playwright` version in package-lock — currently 1.61.1) + `npm ci` + `npx playwright install chromium`. `render.yaml` uses `runtime: docker`, `dockerContext: ./worker`, `dockerfilePath: ./worker/Dockerfile`. `worker/.dockerignore` excludes node_modules (else Windows binaries overwrite the Linux build).
+- **index.js loop:** replaced fixed `setInterval` with a self-scheduling loop + re-entrancy guard — drains back-to-back (500ms) while busy, idles at 60s when empty, one tick in flight = one browser (memory-safe). Per-tick limit 10. Plus a **stuck-run sweep**: re-queues scrape_runs stuck `running` >10min (self-heals after any crash/restart).
+- GitHub Actions tick workflows (`worker-tick*.yml`) DISABLED (schedule + push triggers removed, only `workflow_dispatch` kept). `worker-daily.yml` left as-is (its 6h fanout is redundant w/ index.js's but harmless).
+
+### B. Fast-paths for ALL THREE competitors (browser-free, in `worker/src/fast-paths.js`)
+Each returns `{ price, inStock, imageUrl, name } | null`; runs BEFORE Playwright. Now:
+- **Eureka** — Algolia API (pre-existing).
+- **Xcite** — plain `fetch()` of the product page; price is server-rendered in `<script id="__NEXT_DATA__">` at `props.pageProps.meta.product`: `price.value` (KWD decimal), `price.valueUnmodified` (strike), `status` ("InStock"/"OutOfStock"/"Discontinued"), `media` (Amplience image). URL forms: `/{slug}/p` (valid) — invalid/ghost SKUs have `price: undefined` + `status: Discontinued`.
+- **Best Al-Yousifi** — SAP Commerce (Hybris) + Spartacus. Public OCC REST: `GET https://mrflex.best.com.kw/occ/v2/best/products/{code}?fields=FULL&lang=en&curr=KWD` (no auth). Product code = URL segment after `/p/`. `price.value`, `stock.stockLevelStatus` (inStock/outOfStock/lowStock), `images[].url` (relative → prefix `https://mrflex.best.com.kw`). Invalid codes → `errors: UnknownIdentifierError`.
+- **Cost impact:** all 3 free/browser-less → scraping stays in the free lane; no proxy needed until a NEW competitor has no usable API or rate-limits appear.
+
+### C. Xcite price bugs — the real story (earlier ÷1000 "fils" fix was WRONG, reverted)
+- The `399.9`-on-everything bug was **carousel contamination**: the old browser path's network-JSON fallback + greedy `findPriceInObject` grabbed the first recommendation-carousel product's price (promoted iPhone @ 399.9) for every product. Fixed `findPriceInObject` with `RECO_KEYS` (skips carousel/recommendation/components sub-trees) + skip flyer/homepage `_next/data` responses + soft-404 guard (bail if page title is "404/Not Found").
+- Xcite prices are normal decimals, NOT fils — the ÷1000 heuristic was a false premise, removed.
+- DOM fallback selector (set in `competitors.scrape_config.priceSelector`): `.text-functional-red-800:not(.line-through)` (main non-strikethrough price). Now largely moot since the `__NEXT_DATA__` fast-path handles Xcite.
+
+### D. OOM fix (Render worker crashed: "used over 512MB")
+- **Cause:** invalid/dummy URLs made fast-paths return null → old code fell back to launching Chromium. Hundreds of invalid URLs → hundreds of browser launches → OOM.
+- **Fix (scraper.js):** when a fast-path exists and returns null/empty, record `not_found` and STOP — **never launch a browser** for fast-path competitors (the API/SSR is authoritative; a browser can't find what the API says is gone). Transient fast-path errors record `error` and move on. Browser only runs for competitors WITHOUT a fast-path.
+- Also added memory-safe Chromium `args` (`--disable-dev-shm-usage` essential in containers, + gpu/ext/bg trims) for the rare browser case.
+- **Note:** "512MB" is the instance RAM, NOT a monthly quota — Render auto-restarts on OOM; nothing is "used up". User was confused by this.
+
+### E. Out-of-stock display + stale/discontinued price handling (`src/pages/Comparison.jsx`)
+- Fetches latest `stock_history` per cp; OOS competitor prices render **amber** with an "out of stock" tag (price still shown).
+- **Stale-price bug:** discontinued items (no current price) were showing an old wrong "warranty" price (e.g. Alba watch: stored `2200` = the `2.200` warranty ×1000 from the pre-fast-path DOM scraper). The item re-scrapes as not_found (no new price row) so the stale value persisted as "latest".
+- **Fix:** `isPriceSuperseded(cp, latest)` — if `cp.last_seen_at` is newer than the latest price's `captured_at` by >10min, recent scrapes found no price → item discontinued/removed → show **"no price"** instead of the stale number. Excluded from cheapest/avg/gap + Excel export. OOS-with-real-price items still show (they get a fresh price row each scrape, so not flagged stale). Works on existing data (no cleanup needed).
+
+### F. Architecture discussion (not yet implemented)
+User is planning production release with **staging(UAT) + prod**, iOS+Android apps, multi-user, email price alerts. Agreed shape: separate Supabase projects per env (current project = prod, new free project = staging); branch `develop`→staging, `main`→prod; frontend → Cloudflare Pages (free, commercial-OK, per-branch previews) or keep GH Pages; second Render worker for staging (suspend when idle). Frontend `supabaseClient.js` must become env-var driven (`VITE_SUPABASE_URL`/`_ANON_KEY`) — currently hardcoded. Mobile = Expo/React Native (one codebase, reuses Supabase); UAT via TestFlight + Play internal tracks. Est. running cost ~$150–200/mo at 5,000 products (Supabase Pro $25 likely needed; scraping ~$0 thanks to fast-paths). Mobile adds only ~$99/yr Apple + $25 once Google. NOT started — web prod release is the priority.
+
+### G. Commit hashes this session
+b492ae4, aceb35a, 2f9ceab (products bulk delete + linking + memory §23), 7fc13e7 (fils/OOS — later reverted fils), b5e9e06 (loop), c4cb885 (Docker), 9c852af (disable GH ticks), 6233776 (Xcite fast-path), ecd6402 (Best fast-path), 689929b (OOM fix), 712693c (stale-price "no price").
+
+_Last updated: 2026-07-30 — Render continuous worker (Docker/Playwright image), browser-free fast-paths for all 3 competitors, OOM fix (no-browser-fallback), Xcite carousel-contamination + stale-discontinued-price fixes, OOS coloring. Scraping confirmed healthy._
