@@ -17,17 +17,13 @@ name: Worker · Tick shard 0 (every 5 min)
 #
 # Public repo has unlimited Actions minutes, so cost is $0.
 
+# DISABLED 2026-07-29 — scraping moved to the always-on Render worker
+# (worker/src/index.js). The schedule + push auto-triggers are removed so
+# these GitHub Actions ticks no longer run redundantly. workflow_dispatch is
+# kept so you can still fire a one-off tick manually from the Actions tab.
+# To re-enable cron: restore `schedule:` with `- cron: '*/5 * * * *'`.
 on:
-  schedule:
-    - cron: '*/5 * * * *'
   workflow_dispatch:
-  # Kick a tick immediately when worker code or seed data changes.
-  # Also useful as a "force run now" without needing gh CLI.
-  push:
-    branches: [main]
-    paths:
-      - 'worker/**'
-      - '.github/workflows/worker-tick.yml'
 
 # Skip if a previous shard-0 tick is still running — prevents queue thrashing.
 # Note: the group name includes the shard index so shards 0/1/2 have

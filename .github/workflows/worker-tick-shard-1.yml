@@ -3,15 +3,10 @@ name: Worker · Tick shard 1 (every 5 min)
 # Shard 1 of 3 — processes queued scrape_runs where
 # (competitor_id % 3) === 1. See worker-tick.yml for architecture notes.
 
+# DISABLED 2026-07-29 — scraping moved to the always-on Render worker.
+# Auto-triggers removed; workflow_dispatch kept for manual one-off runs.
 on:
-  schedule:
-    - cron: '*/5 * * * *'
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - 'worker/**'
-      - '.github/workflows/worker-tick-shard-1.yml'
 
 concurrency:
   group: worker-tick-shard-1
