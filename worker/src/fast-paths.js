@@ -131,6 +131,54 @@ async function fastScrapeXcite(url) {
   return { price, inStock, imageUrl: extractXciteImage(product.media), name: product.name || null }
 }
 
+// ── Best Al-Yousifi (best.com.kw) ─────────────────────────────────
+// Runs SAP Commerce Cloud (Hybris) + Spartacus. Its public OCC REST API
+// serves the full product (price, stock, image) with a plain no-auth GET —
+// no browser. The product code is the URL segment after "/p/".
+//   GET https://mrflex.best.com.kw/occ/v2/best/products/{code}?fields=FULL&lang=en&curr=KWD
+//     price = { value, formattedValue, currencyIso }
+//     stock = { stockLevel, stockLevelStatus: inStock | outOfStock | lowStock }
+// Invalid codes return an UnknownIdentifierError → we return null.
+const BEST_OCC = 'https://mrflex.best.com.kw/occ/v2/best/products'
+const BEST_MEDIA_HOST = 'https://mrflex.best.com.kw'
+
+function bestProductCode(url) {
+  const after = url.split(/\/p\//i)[1]
+  if (!after) return null
+  const code = decodeURIComponent(after.split(/[?#]/)[0].replace(/\/+$/, ''))
+  return code || null
+}
+
+async function fastScrapeBest(url) {
+  const code = bestProductCode(url)
+  if (!code) return null
+  const api = `${BEST_OCC}/${encodeURIComponent(code)}?fields=FULL&lang=en&curr=KWD`
+  const res = await fetch(api, {
+    headers: { 'user-agent': XCITE_UA, accept: 'application/json' },
+    signal: AbortSignal.timeout(15_000),
+  })
+  if (!res.ok) return null
+  const p = await res.json().catch(() => null)
+  if (!p || p.errors || p.price?.value == null) return null
+
+  const raw = p.price.value
+  const price = typeof raw === 'number' ? raw : parseFloat(raw)
+  if (!isFinite(price) || price <= 0) return null
+
+  const st = String(p.stock?.stockLevelStatus || '')
+  const inStock = /instock|lowstock/i.test(st) ? true
+    : /outofstock|out[_-]?of[_-]?stock/i.test(st) ? false
+      : (typeof p.stock?.stockLevel === 'number' ? p.stock.stockLevel > 0 : null)
+
+  let imageUrl = null
+  const imgs = Array.isArray(p.images) ? p.images : []
+  const img = imgs.find(i => i.imageType === 'PRIMARY' && i.format === 'product') ||
+              imgs.find(i => i.imageType === 'PRIMARY') || imgs[0]
+  if (img?.url) imageUrl = /^https?:\/\//.test(img.url) ? img.url : BEST_MEDIA_HOST + img.url
+
+  return { price, inStock, imageUrl, name: p.name || null }
+}
+
 const FAST_PATHS = [
   {
     name: 'eureka-algolia',
@@ -141,6 +189,11 @@ const FAST_PATHS = [
     name: 'xcite-nextdata',
     match: (url) => /(?:^|\.)xcite\.com$/i.test(new URL(url).hostname),
     fn: fastScrapeXcite,
+  },
+  {
+    name: 'best-occ',
+    match: (url) => /(?:^|\.)best\.com\.kw$/i.test(new URL(url).hostname),
+    fn: fastScrapeBest,
   },
 ]
 
