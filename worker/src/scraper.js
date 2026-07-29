@@ -71,10 +71,33 @@ async function processOneUrl(cp, ctx, run, config, userPriceSel, userStockSel, c
         console.log(`[scraper] ✓ ${cp.name} → ${result.price} (fast-path: ${fp.name}, ${Date.now() - started}ms)`)
         return
       }
-      // Fast-path returned null → fall through to Playwright
-      console.log(`[scraper] fast-path ${fp.name} returned null for ${cp.name}, falling back to browser`)
+      // Fast-path ran but found no valid product/price (invalid or expired
+      // SKU, discontinued item). For fast-path competitors the API/SSR is the
+      // source of truth, so record not_found and STOP — do NOT launch a
+      // browser. Chromium-per-invalid-URL is what OOM-ed the 512MB worker,
+      // and a browser can't find a product the authoritative API says is gone.
+      await supabase.from('competitor_products')
+        .update({ last_seen_at: new Date().toISOString() }).eq('id', cp.id)
+      await supabase.from('scrape_jobs').insert({
+        scrape_run_id: run.id, competitor_product_id: cp.id, status: 'not_found',
+        error_message: `Fast-path (${fp.name}): no valid product/price — URL likely invalid or discontinued`,
+        duration_ms: Date.now() - started,
+      })
+      counters.notFound++
+      console.log(`[scraper] ✗ ${cp.name}: ${fp.name} → no product (not_found, no browser)`)
+      return
     } catch (e) {
-      console.log(`[scraper] fast-path ${fp.name} threw for ${cp.name}: ${e.message} — falling back`)
+      // Transient fast-path error (network/timeout). Record and move on — the
+      // next scheduled scrape retries via the fast-path, which is far cheaper
+      // and safer than spinning up Chromium under memory pressure.
+      await supabase.from('scrape_jobs').insert({
+        scrape_run_id: run.id, competitor_product_id: cp.id, status: 'error',
+        error_message: `Fast-path ${fp.name} error: ${e.message}`,
+        duration_ms: Date.now() - started,
+      })
+      counters.failed++
+      console.log(`[scraper] fast-path ${fp.name} error for ${cp.name}: ${e.message}`)
+      return
     }
   }
 
@@ -340,6 +363,19 @@ export async function runScrapeJob(run) {
   const browser = await chromium.launch({
     headless: true,
     proxy: process.env.HTTP_PROXY ? { server: process.env.HTTP_PROXY } : undefined,
+    // Memory-safe flags for the 512MB Render container. --disable-dev-shm-usage
+    // is essential: a container's /dev/shm is tiny and Chromium OOM-crashes
+    // without it. The rest trim Chromium's baseline footprint.
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--disable-extensions',
+      '--disable-background-networking',
+      '--disable-background-timer-throttling',
+      '--js-flags=--max-old-space-size=256',
+    ],
   })
 
   // ONE browser context per competitor. Cookies + localStorage persist
@@ -685,6 +721,19 @@ export async function refreshOwnPrices() {
   const browser = await chromium.launch({
     headless: true,
     proxy: process.env.HTTP_PROXY ? { server: process.env.HTTP_PROXY } : undefined,
+    // Memory-safe flags for the 512MB Render container. --disable-dev-shm-usage
+    // is essential: a container's /dev/shm is tiny and Chromium OOM-crashes
+    // without it. The rest trim Chromium's baseline footprint.
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--disable-extensions',
+      '--disable-background-networking',
+      '--disable-background-timer-throttling',
+      '--js-flags=--max-old-space-size=256',
+    ],
   })
 
   let updated = 0, failed = 0

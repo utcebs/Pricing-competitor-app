@@ -34,6 +34,19 @@ async function tick() {
   console.log('[worker] tick @', new Date().toISOString())
   let processed = 0
   try {
+    // Self-heal: if a previous run crashed/restarted mid-scrape (e.g. OOM),
+    // its scrape_runs rows are stuck in 'running' forever and never retried.
+    // Fast-path scrapes finish in <2s, so anything 'running' > 10 min is dead.
+    // Re-queue them so they get picked up again this loop.
+    const stuckCutoff = new Date(Date.now() - 10 * 60_000).toISOString()
+    const { data: stuck } = await supabase
+      .from('scrape_runs')
+      .update({ status: 'queued', started_at: null })
+      .eq('status', 'running')
+      .lt('started_at', stuckCutoff)
+      .select('id')
+    if (stuck?.length) console.log(`[worker] re-queued ${stuck.length} stuck run(s)`)
+
     const { data: queued } = await supabase
       .from('scrape_runs')
       .select('*')
