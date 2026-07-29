@@ -106,16 +106,18 @@ export default function Comparison() {
         .map(cp => {
           const latest = latestPrices[cp.id]
           const competitor = competitors.find(c => c.id === cp.competitor_id)
-          return {
-            cp,
-            competitor,
-            latest,
-          }
+          // "Superseded": the item was scraped more recently than its last
+          // recorded price → recent scrapes found NO price (discontinued /
+          // removed from catalogue), so the stored price is stale and must
+          // NOT be shown as current (this is the old warranty-price bug).
+          const superseded = isPriceSuperseded(cp, latest)
+          const effPrice = (latest?.price != null && !superseded) ? Number(latest.price) : null
+          return { cp, competitor, latest, superseded, effPrice }
         })
         .filter(r => r.competitor)  // drop unlinked competitors
-      // Also compute: min competitor price, avg, gap vs your price
-      const withPrice = rows.filter(r => r.latest?.price != null)
-      const prices   = withPrice.map(r => Number(r.latest.price))
+      // Compute min/avg/gap from EFFECTIVE (current, non-stale) prices only.
+      const withPrice = rows.filter(r => r.effPrice != null)
+      const prices   = withPrice.map(r => r.effPrice)
       const minPrice = prices.length ? Math.min(...prices) : null
       const avgPrice = prices.length ? prices.reduce((a, b) => a + b, 0) / prices.length : null
       const yourPrice = p.current_price != null ? Number(p.current_price) : null
@@ -200,18 +202,18 @@ export default function Comparison() {
         'Your Price': pc.yourPrice != null ? Number(pc.yourPrice.toFixed(3)) : null,
         'Cheapest Rival Price': pc.minPrice != null ? Number(pc.minPrice.toFixed(3)) : null,
         'Cheapest Rival': pc.rows
-          .filter(r => r.latest?.price != null)
-          .reduce((best, cur) => (!best || Number(cur.latest.price) < Number(best.latest.price) ? cur : best), null)
+          .filter(r => r.effPrice != null)
+          .reduce((best, cur) => (!best || cur.effPrice < best.effPrice ? cur : best), null)
           ?.competitor?.name || '',
-        'Avg Rival Price': pc.avgRival != null ? Number(pc.avgRival.toFixed(3)) : null,
+        'Avg Rival Price': pc.avgPrice != null ? Number(pc.avgPrice.toFixed(3)) : null,
         'Gap vs Cheapest %': pc.gapVsMinPct != null ? Number(pc.gapVsMinPct.toFixed(2)) : null,
         'Gap vs Avg %':      pc.gapVsAvgPct != null ? Number(pc.gapVsAvgPct.toFixed(2)) : null,
       }
-      // Per-competitor price columns
+      // Per-competitor price columns — effective (current, non-stale) price only.
       for (const comp of competitors) {
         const match = pc.rows.find(r => r.competitor.id === comp.id)
-        base[comp.name] = match?.latest?.price != null
-          ? Number(Number(match.latest.price).toFixed(3))
+        base[comp.name] = match?.superseded ? 'no price'
+          : match?.effPrice != null ? Number(match.effPrice.toFixed(3))
           : null
       }
       return base
@@ -391,7 +393,13 @@ export default function Comparison() {
                     {competitors.map(c => {
                       const match = pc.rows.find(r => r.competitor.id === c.id)
                       if (!match) return <Td key={c.id} className="text-right"><span className="text-ink-200">·</span></Td>
-                      const px = match.latest?.price
+                      // Item scraped since its last price but no price found → discontinued/removed.
+                      if (match.superseded) return (
+                        <Td key={c.id} className="text-right">
+                          <span className="text-[11px] font-medium text-amber-600" title="No price on the competitor's site (out of stock / discontinued)">no price</span>
+                        </Td>
+                      )
+                      const px = match.effPrice
                       if (px == null) return (
                         <Td key={c.id} className="text-right">
                           <span className="text-[11px] text-ink-400 italic">no data</span>
@@ -497,6 +505,16 @@ function MiniGap({ pct }) {
 function symbolFor(code) {
   const map = { KWD:'KD', USD:'$', EUR:'€', AED:'AED', SAR:'SAR', GBP:'£' }
   return map[code] || code || ''
+}
+
+// A stored price is "superseded" when the item has been scraped more recently
+// than that price was captured — i.e. later scrapes found NO price (product
+// discontinued / removed), so the last known price is stale and should not be
+// shown as the current price. 10-min guard absorbs same-scrape timestamp jitter.
+const STALE_PRICE_MS = 10 * 60 * 1000
+function isPriceSuperseded(cp, latest) {
+  if (!latest?.captured_at || !cp?.last_seen_at) return false
+  return new Date(cp.last_seen_at).getTime() - new Date(latest.captured_at).getTime() > STALE_PRICE_MS
 }
 
 function ProductThumb({ src, name }) {
