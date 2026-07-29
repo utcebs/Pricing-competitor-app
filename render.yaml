@@ -23,18 +23,13 @@
 services:
   - type: worker
     name: price-competitor-worker
-    runtime: node
+    runtime: docker        # Build from worker/Dockerfile (Playwright base image)
     plan: starter          # $7/mo · 512 MB RAM · adequate for Playwright + 15 competitors
     region: frankfurt      # Close to Kuwait — change if you're deploying elsewhere
-    rootDir: worker
+    dockerContext: ./worker
+    dockerfilePath: ./worker/Dockerfile
     autoDeploy: true       # Redeploy on every push to main
-    buildCommand: |
-      npm ci
-      npx playwright install --with-deps chromium
-    startCommand: node src/index.js
     envVars:
-      - key: NODE_VERSION
-        value: "22"
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
