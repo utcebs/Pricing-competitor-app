@@ -410,13 +410,23 @@ export default function Comparison() {
                       // Item scraped since its last price but no price found → discontinued/removed.
                       if (match.superseded) return (
                         <Td key={c.id} className="text-right">
-                          <span className="text-[11px] font-medium text-amber-600" title="No price on the competitor's site (out of stock / discontinued)">no price</span>
+                          <a href={match.cp.url} target="_blank" rel="noopener noreferrer"
+                            title="No price on the competitor's site (out of stock / discontinued) — open page"
+                            className="text-[11px] font-medium text-amber-600 hover:underline inline-flex items-center gap-1 group">
+                            no price
+                            <ExternalLink size={9} className="opacity-0 group-hover:opacity-100 transition-opacity" />
+                          </a>
                         </Td>
                       )
                       const px = match.effPrice
                       if (px == null) return (
                         <Td key={c.id} className="text-right">
-                          <span className="text-[11px] text-ink-400 italic">no data</span>
+                          <a href={match.cp.url} target="_blank" rel="noopener noreferrer"
+                            title="No price captured yet — open page"
+                            className="text-[11px] text-ink-400 italic hover:text-brand-700 hover:underline inline-flex items-center gap-1 group">
+                            no data
+                            <ExternalLink size={9} className="opacity-0 group-hover:opacity-100 transition-opacity" />
+                          </a>
                         </Td>
                       )
                       const cellPct = pc.yourPrice != null
