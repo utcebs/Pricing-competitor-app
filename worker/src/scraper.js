@@ -71,20 +71,42 @@ async function processOneUrl(cp, ctx, run, config, userPriceSel, userStockSel, c
         console.log(`[scraper] ✓ ${cp.name} → ${result.price} (fast-path: ${fp.name}, ${Date.now() - started}ms)`)
         return
       }
-      // Fast-path ran but found no valid product/price (invalid or expired
-      // SKU, discontinued item). For fast-path competitors the API/SSR is the
-      // source of truth, so record not_found and STOP — do NOT launch a
-      // browser. Chromium-per-invalid-URL is what OOM-ed the 512MB worker,
-      // and a browser can't find a product the authoritative API says is gone.
+      if (result?.exists) {
+        // VALID product page but no current price (out of stock / discontinued).
+        // Record the STOCK (no price row) so the UI shows "out of stock" and
+        // knows the link is real — NOT "invalid link".
+        if (result.inStock !== null && result.inStock !== undefined) {
+          await supabase.from('stock_history').insert({
+            competitor_product_id: cp.id, in_stock: result.inStock,
+            source: 'scrape', scrape_run_id: run.id,
+          })
+        }
+        const cpUpdate = { last_seen_at: new Date().toISOString() }
+        if (result.imageUrl) cpUpdate.image_url = result.imageUrl
+        await supabase.from('competitor_products').update(cpUpdate).eq('id', cp.id)
+        await supabase.from('scrape_jobs').insert({
+          scrape_run_id: run.id, competitor_product_id: cp.id, status: 'ok',
+          price_extracted: null, in_stock_extracted: result.inStock ?? null,
+          error_message: 'Valid product, no current price (out of stock / discontinued)',
+          duration_ms: Date.now() - started,
+        })
+        counters.scraped++
+        console.log(`[scraper] ○ ${cp.name}: valid, no price (${fp.name}, stock=${result.inStock})`)
+        return
+      }
+      // Fast-path ran and the product does NOT exist (dead/removed URL). For
+      // fast-path competitors the API/SSR is authoritative, so record not_found
+      // and STOP — do NOT launch a browser (Chromium-per-invalid-URL OOM-ed the
+      // 512MB worker, and a browser can't find what the API says is gone).
       await supabase.from('competitor_products')
         .update({ last_seen_at: new Date().toISOString() }).eq('id', cp.id)
       await supabase.from('scrape_jobs').insert({
         scrape_run_id: run.id, competitor_product_id: cp.id, status: 'not_found',
-        error_message: `Fast-path (${fp.name}): no valid product/price — URL likely invalid or discontinued`,
+        error_message: `Fast-path (${fp.name}): product not found — URL invalid or removed`,
         duration_ms: Date.now() - started,
       })
       counters.notFound++
-      console.log(`[scraper] ✗ ${cp.name}: ${fp.name} → no product (not_found, no browser)`)
+      console.log(`[scraper] ✗ ${cp.name}: ${fp.name} → not found (invalid URL)`)
       return
     } catch (e) {
       // Transient fast-path error (network/timeout). Record and move on — the

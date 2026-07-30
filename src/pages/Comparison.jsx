@@ -226,8 +226,10 @@ export default function Comparison() {
       // Per-competitor price columns — effective (current, non-stale) price only.
       for (const comp of competitors) {
         const match = pc.rows.find(r => r.competitor.id === comp.id)
+        const st = match ? latestStock[match.cp.id] : undefined
         base[comp.name] = !match ? null
           : match.effPrice != null ? Number(match.effPrice.toFixed(3))
+          : (st === true || st === false) ? 'out of stock'
           : match.cp.last_seen_at ? 'invalid link'
           : null
       }
@@ -410,21 +412,25 @@ export default function Comparison() {
                       if (!match) return <Td key={c.id} className="text-right"><span className="text-ink-200">·</span></Td>
                       const px = match.effPrice
                       if (px == null) {
-                        // No usable current price. If the item HAS been scraped
-                        // (last_seen_at set) but yields no price — superseded or
-                        // never priced — the URL is dead/discontinued → "invalid
-                        // link". If it was never scraped yet → "no data".
+                        // No current price. Distinguish three cases:
+                        //  • we have a stock reading → product EXISTS but no price → "out of stock"
+                        //  • scraped, no stock reading → dead/removed URL → "invalid link"
+                        //  • never scraped → "no data"
+                        const stock = latestStock[match.cp.id]
+                        const knownStock = stock === true || stock === false
                         const scraped = !!match.cp.last_seen_at
+                        const label = knownStock ? 'out of stock' : scraped ? 'invalid link' : 'no data'
+                        const cls = knownStock ? 'font-medium text-amber-600'
+                          : scraped ? 'font-medium text-red-500'
+                            : 'text-ink-400 italic hover:text-brand-700'
+                        const title = knownStock ? 'Valid product, currently out of stock (no price). Click to open.'
+                          : scraped ? 'Invalid or removed — no product on the competitor page. Click to open.'
+                            : 'Not scraped yet. Click to open.'
                         return (
                           <Td key={c.id} className="text-right">
-                            <a href={match.cp.url} target="_blank" rel="noopener noreferrer"
-                              title={scraped
-                                ? 'Invalid or discontinued — no price on the competitor page. Click to open.'
-                                : 'Not scraped yet. Click to open.'}
-                              className={`text-[11px] hover:underline inline-flex items-center gap-1 group ${
-                                scraped ? 'font-medium text-red-500' : 'text-ink-400 italic hover:text-brand-700'
-                              }`}>
-                              {scraped ? 'invalid link' : 'no data'}
+                            <a href={match.cp.url} target="_blank" rel="noopener noreferrer" title={title}
+                              className={`text-[11px] hover:underline inline-flex items-center gap-1 group ${cls}`}>
+                              {label}
                               <ExternalLink size={9} className="opacity-0 group-hover:opacity-100 transition-opacity" />
                             </a>
                           </Td>

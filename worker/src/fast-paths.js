@@ -16,6 +16,9 @@
  * only make scraping better, never worse.
  */
 
+// Shared realistic UA for the plain HTML/API fetches below.
+const FETCH_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+
 // Eureka's Algolia index is a PUBLIC search-only key — same one the site
 // itself uses when you visit any product page. Not a secret. Discovered
 // by reading the page HTML: <input id="srcapk" value="..."> holds the
@@ -51,32 +54,41 @@ async function fastScrapeEureka(url) {
   if (!res.ok) return null
   const data = await res.json()
   const hit = data.hits?.[0]
-  if (!hit) return null
 
-  // Eureka field map:
-  //   clprc  — cash list price (what customers actually pay) — preferred
-  //   lprc   — strike-through original price (fallback)
-  //   avaqt  — available quantity (>0 = in stock)
-  //   ipic   — product image filename in their CDN
-  //   itmn   — product name (canonical)
-  const price = typeof hit.clprc === 'number' && hit.clprc > 0
-    ? hit.clprc
-    : typeof hit.lprc === 'number' && hit.lprc > 0
-      ? hit.lprc
+  if (hit) {
+    // Eureka field map:
+    //   clprc  — cash list price (what customers pay) — preferred
+    //   lprc   — strike-through original price (fallback)
+    //   avaqt  — available quantity (>0 = in stock)
+    //   ipic   — product image filename in their CDN
+    //   itmn   — product name (canonical)
+    const price = typeof hit.clprc === 'number' && hit.clprc > 0
+      ? hit.clprc
+      : typeof hit.lprc === 'number' && hit.lprc > 0
+        ? hit.lprc
+        : null
+    const inStock = typeof hit.avaqt === 'number' ? hit.avaqt > 0 : null
+    const imageUrl = hit.ipic
+      ? `https://cdnimage.eureka.com.kw/uploaded_images/products/${hit.ipic}`
       : null
-  if (price == null) return null
-
-  const inStock = typeof hit.avaqt === 'number' ? hit.avaqt > 0 : null
-  const imageUrl = hit.ipic
-    ? `https://cdnimage.eureka.com.kw/uploaded_images/products/${hit.ipic}`
-    : null
-
-  return {
-    price,
-    inStock,
-    imageUrl,
-    name: hit.itmn || null,
+    if (price != null) return { price, inStock, imageUrl, name: hit.itmn || null }
+    // In the index but no price → valid, treat as out of stock.
+    return { price: null, inStock: inStock ?? false, exists: true, imageUrl, name: hit.itmn || null }
   }
+
+  // No Algolia hit. The index only holds IN-STOCK items, so this may still be
+  // a VALID out-of-stock product page (not a dead URL). Eureka SSRs the product
+  // name into <title> for real products; removed/invalid ones get a "," title.
+  try {
+    const html = await (await fetch(url, {
+      headers: { 'user-agent': FETCH_UA }, signal: AbortSignal.timeout(15_000),
+    })).text()
+    const title = (html.match(/<title>([^<]*)<\/title>/i)?.[1] || '').trim()
+    if (title.replace(/[\s,]/g, '').length > 2) {
+      return { price: null, inStock: false, exists: true, name: title.split(/[–|]/)[0].trim() || null }
+    }
+  } catch { /* fall through to invalid */ }
+  return null   // truly invalid / removed
 }
 
 // ── Xcite (xcite.com) ─────────────────────────────────────────────
@@ -117,18 +129,27 @@ async function fastScrapeXcite(url) {
 
   let product
   try { product = JSON.parse(m[1])?.props?.pageProps?.meta?.product } catch { return null }
-  if (!product) return null
-
-  const raw = product.price?.value
-  const price = typeof raw === 'number' ? raw : parseFloat(raw)
-  if (!isFinite(price) || price <= 0) return null   // discontinued / no price
+  if (!product) return null   // no product node → 404 / invalid URL
 
   const status = String(product.status || '')
   const inStock = /instock/i.test(status) ? true
     : /(outofstock|out[_-]?of[_-]?stock|soldout|discontinued|unavailable)/i.test(status) ? false
       : null
+  const imageUrl = extractXciteImage(product.media)
+  const name = product.name || null
 
-  return { price, inStock, imageUrl: extractXciteImage(product.media), name: product.name || null }
+  const raw = product.price?.value
+  const price = typeof raw === 'number' ? raw : parseFloat(raw)
+  if (isFinite(price) && price > 0) return { price, inStock, imageUrl, name }
+
+  // meta.product present but no price. Xcite returns a PLACEHOLDER product even
+  // for ghost/expired SKUs — with the numeric SKU as the "name". Only treat it
+  // as a real discontinued/out-of-stock product when the name looks real (has
+  // letters). A digits-only / empty name means the URL is invalid.
+  if (name && /[a-z]/i.test(name)) {
+    return { price: null, inStock: inStock ?? false, exists: true, imageUrl, name }
+  }
+  return null
 }
 
 // ── Best Al-Yousifi (best.com.kw) ─────────────────────────────────
@@ -159,11 +180,7 @@ async function fastScrapeBest(url) {
   })
   if (!res.ok) return null
   const p = await res.json().catch(() => null)
-  if (!p || p.errors || p.price?.value == null) return null
-
-  const raw = p.price.value
-  const price = typeof raw === 'number' ? raw : parseFloat(raw)
-  if (!isFinite(price) || price <= 0) return null
+  if (!p || p.errors) return null   // UnknownIdentifierError → invalid/removed
 
   const st = String(p.stock?.stockLevelStatus || '')
   const inStock = /instock|lowstock/i.test(st) ? true
@@ -176,7 +193,13 @@ async function fastScrapeBest(url) {
               imgs.find(i => i.imageType === 'PRIMARY') || imgs[0]
   if (img?.url) imageUrl = /^https?:\/\//.test(img.url) ? img.url : BEST_MEDIA_HOST + img.url
 
-  return { price, inStock, imageUrl, name: p.name || null }
+  const name = p.name || null
+  const raw = p.price?.value
+  const price = typeof raw === 'number' ? raw : parseFloat(raw)
+  if (isFinite(price) && price > 0) return { price, inStock, imageUrl, name }
+
+  // Product exists but no price → VALID, out of stock.
+  return { price: null, inStock: inStock ?? false, exists: true, imageUrl, name }
 }
 
 const FAST_PATHS = [
