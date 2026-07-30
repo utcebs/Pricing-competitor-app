@@ -226,8 +226,9 @@ export default function Comparison() {
       // Per-competitor price columns — effective (current, non-stale) price only.
       for (const comp of competitors) {
         const match = pc.rows.find(r => r.competitor.id === comp.id)
-        base[comp.name] = match?.superseded ? 'no price'
-          : match?.effPrice != null ? Number(match.effPrice.toFixed(3))
+        base[comp.name] = !match ? null
+          : match.effPrice != null ? Number(match.effPrice.toFixed(3))
+          : match.cp.last_seen_at ? 'invalid link'
           : null
       }
       return base
@@ -407,28 +408,28 @@ export default function Comparison() {
                     {competitors.map(c => {
                       const match = pc.rows.find(r => r.competitor.id === c.id)
                       if (!match) return <Td key={c.id} className="text-right"><span className="text-ink-200">·</span></Td>
-                      // Item scraped since its last price but no price found → discontinued/removed.
-                      if (match.superseded) return (
-                        <Td key={c.id} className="text-right">
-                          <a href={match.cp.url} target="_blank" rel="noopener noreferrer"
-                            title="No price on the competitor's site (out of stock / discontinued) — open page"
-                            className="text-[11px] font-medium text-amber-600 hover:underline inline-flex items-center gap-1 group">
-                            no price
-                            <ExternalLink size={9} className="opacity-0 group-hover:opacity-100 transition-opacity" />
-                          </a>
-                        </Td>
-                      )
                       const px = match.effPrice
-                      if (px == null) return (
-                        <Td key={c.id} className="text-right">
-                          <a href={match.cp.url} target="_blank" rel="noopener noreferrer"
-                            title="No price captured yet — open page"
-                            className="text-[11px] text-ink-400 italic hover:text-brand-700 hover:underline inline-flex items-center gap-1 group">
-                            no data
-                            <ExternalLink size={9} className="opacity-0 group-hover:opacity-100 transition-opacity" />
-                          </a>
-                        </Td>
-                      )
+                      if (px == null) {
+                        // No usable current price. If the item HAS been scraped
+                        // (last_seen_at set) but yields no price — superseded or
+                        // never priced — the URL is dead/discontinued → "invalid
+                        // link". If it was never scraped yet → "no data".
+                        const scraped = !!match.cp.last_seen_at
+                        return (
+                          <Td key={c.id} className="text-right">
+                            <a href={match.cp.url} target="_blank" rel="noopener noreferrer"
+                              title={scraped
+                                ? 'Invalid or discontinued — no price on the competitor page. Click to open.'
+                                : 'Not scraped yet. Click to open.'}
+                              className={`text-[11px] hover:underline inline-flex items-center gap-1 group ${
+                                scraped ? 'font-medium text-red-500' : 'text-ink-400 italic hover:text-brand-700'
+                              }`}>
+                              {scraped ? 'invalid link' : 'no data'}
+                              <ExternalLink size={9} className="opacity-0 group-hover:opacity-100 transition-opacity" />
+                            </a>
+                          </Td>
+                        )
+                      }
                       const cellPct = pc.yourPrice != null
                         ? ((pc.yourPrice - Number(px)) / Number(px)) * 100
                         : null
