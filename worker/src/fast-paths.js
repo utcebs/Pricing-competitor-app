@@ -170,17 +170,32 @@ function bestProductCode(url) {
   return code || null
 }
 
-async function fastScrapeBest(url) {
-  const code = bestProductCode(url)
-  if (!code) return null
-  const api = `${BEST_OCC}/${encodeURIComponent(code)}?fields=FULL&lang=en&curr=KWD`
-  const res = await fetch(api, {
-    headers: { 'user-agent': XCITE_UA, accept: 'application/json' },
+async function occGet(path) {
+  const res = await fetch(`${BEST_OCC.replace(/\/products$/, '')}/${path}`, {
+    headers: { 'user-agent': FETCH_UA, accept: 'application/json' },
     signal: AbortSignal.timeout(15_000),
   })
   if (!res.ok) return null
-  const p = await res.json().catch(() => null)
-  if (!p || p.errors) return null   // UnknownIdentifierError → invalid/removed
+  return res.json().catch(() => null)
+}
+
+async function fastScrapeBest(url) {
+  const code = bestProductCode(url)
+  if (!code) return null
+
+  // 1. Direct product lookup by the URL's /p/{code}.
+  let p = await occGet(`products/${encodeURIComponent(code)}?fields=FULL&lang=en&curr=KWD`)
+
+  // 2. If not found, the URL code is often an alternate/manufacturer SKU rather
+  //    than the OCC product code (e.g. /p/67680-T → real product MF210W100WB/T-GCC).
+  //    Best indexes those for search, so resolve via search. Use the search hit
+  //    directly (fields=FULL carries price + stock) — re-fetching by the real
+  //    code fails when the code contains a "/".
+  if (!p || p.errors) {
+    const s = await occGet(`products/search?query=${encodeURIComponent(code)}&fields=FULL&pageSize=1&lang=en&curr=KWD`)
+    p = s?.products?.[0] || null
+  }
+  if (!p || p.errors) return null   // genuinely not in catalogue → invalid
 
   const st = String(p.stock?.stockLevelStatus || '')
   const inStock = /instock|lowstock/i.test(st) ? true
