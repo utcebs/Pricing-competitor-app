@@ -37,48 +37,62 @@ export default function Comparison() {
 
   const { rows: categories } = useTable('categories', { order: ['name', { ascending: true }] })
 
-  // Pull latest price for every competitor_product in ONE query.
-  const cpIds = cps.map(c => c.id)
+  // Pull the LATEST price per competitor_product. We paginate the recent
+  // window instead of filtering by a (potentially 1500+ item) id list — that
+  // both dodges Supabase's 1000-row-per-request cap AND avoids a 414-length
+  // URL. Keeping the first row seen per cp (rows come newest-first) = latest.
   useEffect(() => {
-    if (cpIds.length === 0) { setLatestPrices({}); setLastRefreshed(new Date()); return }
+    let cancelled = false
     setPriceLoading(true); setPriceErr('')
-    const from = new Date(); from.setDate(from.getDate() - 60)
-    supabase.from('price_history')
-      .select('competitor_product_id, price, currency_code, captured_at')
-      .in('competitor_product_id', cpIds)
-      .gte('captured_at', from.toISOString())
-      .order('captured_at', { ascending: false })
-      .then(({ data, error }) => {
-        setPriceLoading(false)
-        setLastRefreshed(new Date())
-        if (error) { setPriceErr(error.message); return }
-        const seen = {}
+    ;(async () => {
+      const from = new Date(); from.setDate(from.getDate() - 60)
+      const PAGE = 1000, seen = {}
+      let start = 0, err = null
+      for (let page = 0; page < 50; page++) {
+        const { data, error } = await supabase.from('price_history')
+          .select('competitor_product_id, price, currency_code, captured_at')
+          .gte('captured_at', from.toISOString())
+          .order('captured_at', { ascending: false })
+          .range(start, start + PAGE - 1)
+        if (error) { err = error; break }
         for (const row of (data || [])) {
-          if (!seen[row.competitor_product_id]) seen[row.competitor_product_id] = row
+          if (!(row.competitor_product_id in seen)) seen[row.competitor_product_id] = row
         }
-        setLatestPrices(seen)
-      })
-  }, [cpIds.join(','), refreshTick])
+        if (!data || data.length < PAGE) break
+        start += PAGE
+      }
+      if (cancelled) return
+      setPriceLoading(false); setLastRefreshed(new Date())
+      if (err) { setPriceErr(err.message); return }
+      setLatestPrices(seen)
+    })()
+    return () => { cancelled = true }
+  }, [refreshTick])
 
-  // Pull latest STOCK status for every competitor_product (separate table).
-  // Used only to colour prices — an out-of-stock item still shows its price.
+  // Latest STOCK status per competitor_product (separate table), same pattern.
   useEffect(() => {
-    if (cpIds.length === 0) { setLatestStock({}); return }
-    const from = new Date(); from.setDate(from.getDate() - 60)
-    supabase.from('stock_history')
-      .select('competitor_product_id, in_stock, captured_at')
-      .in('competitor_product_id', cpIds)
-      .gte('captured_at', from.toISOString())
-      .order('captured_at', { ascending: false })
-      .then(({ data, error }) => {
+    let cancelled = false
+    ;(async () => {
+      const from = new Date(); from.setDate(from.getDate() - 60)
+      const PAGE = 1000, seen = {}
+      let start = 0
+      for (let page = 0; page < 50; page++) {
+        const { data, error } = await supabase.from('stock_history')
+          .select('competitor_product_id, in_stock, captured_at')
+          .gte('captured_at', from.toISOString())
+          .order('captured_at', { ascending: false })
+          .range(start, start + PAGE - 1)
         if (error) return   // stock is a nice-to-have; never block the grid
-        const seen = {}
         for (const row of (data || [])) {
           if (!(row.competitor_product_id in seen)) seen[row.competitor_product_id] = row.in_stock
         }
-        setLatestStock(seen)
-      })
-  }, [cpIds.join(','), refreshTick])
+        if (!data || data.length < PAGE) break
+        start += PAGE
+      }
+      if (!cancelled) setLatestStock(seen)
+    })()
+    return () => { cancelled = true }
+  }, [refreshTick])
 
   const refreshAll = () => {
     refreshProducts(); refreshCompetitors(); refreshCps()
