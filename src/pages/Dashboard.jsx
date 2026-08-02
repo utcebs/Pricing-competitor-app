@@ -7,7 +7,7 @@ import {
   Flame, ShieldCheck, ClipboardList, ChevronRight, Percent,
 } from 'lucide-react'
 import { supabase } from '../supabaseClient'
-import { useTable } from '../lib/db'
+import { useTable, fetchLatestPrices } from '../lib/db'
 import { useAuth } from '../lib/auth'
 import { PageHeader, Card, Button, LoadingBlock, Badge } from '../components/UI'
 
@@ -70,26 +70,27 @@ export default function Dashboard() {
   const [pendingProposals, setPendingProposals] = useState(0)
   const [loading, setLoading] = useState(true)
 
-  const cpIds = cps.map(c => c.id)
-
+  // Latest price per competitor_product — server-side DISTINCT ON RPC. Complete
+  // (one row per cp, no matter how deep the history) and fast — replaces the old
+  // 1500-UUID `.in()` filter that built a multi-KB URL and could miss cps.
   useEffect(() => {
-    if (cpIds.length === 0) { setLatestPrices({}); setPriceHistory([]); return }
-    const from = new Date(); from.setDate(from.getDate() - 60)
+    fetchLatestPrices(60)
+      .then(({ prices }) => setLatestPrices(prices))
+      .catch(() => setLatestPrices({}))
+  }, [])
+
+  // Recent price MOVES need ≥2 readings per cp, so they still come from raw
+  // history — but bounded to a small 7-day window (newest-first, capped) just
+  // for the "recent moves" / market-drivers feeds, NOT the whole catalogue.
+  useEffect(() => {
+    const from = new Date(); from.setDate(from.getDate() - 7)
     supabase.from('price_history')
       .select('id, competitor_product_id, price, currency_code, captured_at, competitor_products(name, competitor_id, product_id, competitors(name))')
-      .in('competitor_product_id', cpIds)
       .gte('captured_at', from.toISOString())
       .order('captured_at', { ascending: false })
-      .limit(1500)
-      .then(({ data }) => {
-        const seen = {}
-        for (const row of (data || [])) {
-          if (!seen[row.competitor_product_id]) seen[row.competitor_product_id] = row
-        }
-        setLatestPrices(seen)
-        setPriceHistory(data || [])
-      })
-  }, [cpIds.join(',')])
+      .limit(1000)
+      .then(({ data }) => setPriceHistory(data || []))
+  }, [])
 
   useEffect(() => {
     supabase.from('scrape_runs')
@@ -171,14 +172,17 @@ export default function Dashboard() {
   const totalProducts = productIntel.length
   const coveragePct = totalProducts > 0 ? Math.round((trackedCount / totalProducts) * 100) : 0
 
-  // Competitors with at least one scraped price
+  // Competitors with at least one scraped price. latestPrices is now keyed by
+  // cp_id (RPC rows carry no embed), so resolve competitor_id via the cps list.
   const competitorsTracked = useMemo(() => {
+    const compByCp = Object.fromEntries(cps.map(c => [c.id, c.competitor_id]))
     const active = new Set()
-    for (const [, pr] of Object.entries(latestPrices)) {
-      if (pr?.competitor_products?.competitor_id) active.add(pr.competitor_products.competitor_id)
+    for (const cpId of Object.keys(latestPrices)) {
+      const cid = compByCp[cpId]
+      if (cid != null) active.add(cid)
     }
     return active.size || competitors.length
-  }, [latestPrices, competitors])
+  }, [latestPrices, cps, competitors])
 
   // Latest scan across all captured_at, not just scrape_runs (works even
   // if a run finished but its rows landed via a different path).

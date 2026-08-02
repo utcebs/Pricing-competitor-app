@@ -74,3 +74,88 @@ export async function saveRow(table, row) {
 export async function deleteRow(table, id) {
   return supabase.from(table).delete().eq('id', id)
 }
+
+/**
+ * fetchLatestPrices — latest price per competitor_product, computed
+ * SERVER-SIDE via the get_latest_prices() DISTINCT ON RPC. One row per cp
+ * instead of paging the whole history and deduping in the browser.
+ * Falls back to the legacy client-side paginator if the RPC hasn't been
+ * migrated yet, so the page never breaks.
+ *
+ * Returns { prices: { [cpId]: { price, currency_code, captured_at } },
+ *           suspect: { [cpId]: true },   // most-recent reading was flagged
+ *           newest:  iso string | null } // newest captured_at across all cps
+ */
+export async function fetchLatestPrices(days = 60) {
+  const { data, error } = await supabase.rpc('get_latest_prices', { days })
+  if (!error && Array.isArray(data)) {
+    const prices = {}, suspect = {}
+    let newest = null
+    for (const r of data) {
+      prices[r.competitor_product_id] = r
+      if (r.is_suspect) suspect[r.competitor_product_id] = true
+      if (r.captured_at && (!newest || r.captured_at > newest)) newest = r.captured_at
+    }
+    return { prices, suspect, newest }
+  }
+  return legacyLatestPrices(days)   // RPC missing / errored → old path
+}
+
+// Legacy: page the recent window newest-first and keep the first row seen per
+// cp (= latest). Kept only as a safety net for un-migrated environments.
+async function legacyLatestPrices(days) {
+  const from = new Date(); from.setDate(from.getDate() - days)
+  const PAGE = 1000, prices = {}, suspect = {}
+  let start = 0, newest = null
+  let cols = 'competitor_product_id, price, currency_code, captured_at, is_suspect'
+  for (let page = 0; page < 50; page++) {
+    let { data, error } = await supabase.from('price_history')
+      .select(cols).gte('captured_at', from.toISOString())
+      .order('captured_at', { ascending: false }).range(start, start + PAGE - 1)
+    if (error && /is_suspect/.test(error.message || '') && cols.includes('is_suspect')) {
+      cols = 'competitor_product_id, price, currency_code, captured_at'; page--; continue
+    }
+    if (error) throw error
+    for (const row of (data || [])) {
+      const id = row.competitor_product_id
+      if (!newest && row.captured_at) newest = row.captured_at
+      if (row.is_suspect) { if (!(id in prices)) suspect[id] = true; continue }
+      if (!(id in prices)) prices[id] = row
+    }
+    if (!data || data.length < PAGE) break
+    start += PAGE
+  }
+  return { prices, suspect, newest }
+}
+
+/**
+ * fetchLatestStock — latest in_stock per competitor_product via the
+ * get_latest_stock() RPC, with the same legacy fallback. Stock is a
+ * nice-to-have, so any error resolves to {} rather than throwing.
+ * Returns { [cpId]: boolean }.
+ */
+export async function fetchLatestStock(days = 60) {
+  const { data, error } = await supabase.rpc('get_latest_stock', { days })
+  if (!error && Array.isArray(data)) {
+    const stock = {}
+    for (const r of data) stock[r.competitor_product_id] = r.in_stock
+    return stock
+  }
+  const from = new Date(); from.setDate(from.getDate() - days)
+  const PAGE = 1000, stock = {}
+  let start = 0
+  for (let page = 0; page < 50; page++) {
+    const { data, error } = await supabase.from('stock_history')
+      .select('competitor_product_id, in_stock, captured_at')
+      .gte('captured_at', from.toISOString())
+      .order('captured_at', { ascending: false })
+      .range(start, start + PAGE - 1)
+    if (error) break   // never block the grid on stock
+    for (const row of (data || [])) {
+      if (!(row.competitor_product_id in stock)) stock[row.competitor_product_id] = row.in_stock
+    }
+    if (!data || data.length < PAGE) break
+    start += PAGE
+  }
+  return stock
+}

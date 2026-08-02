@@ -3,7 +3,7 @@ import { GitCompare, ArrowUpRight, ArrowDownRight, Minus, ExternalLink, Search, 
 import * as XLSX from 'xlsx'
 import { NavLink } from 'react-router-dom'
 import { supabase } from '../supabaseClient'
-import { useTable } from '../lib/db'
+import { useTable, fetchLatestPrices, fetchLatestStock } from '../lib/db'
 import { useAuth } from '../lib/auth'
 import {
   PageHeader, Card, Empty, LoadingBlock, ErrorBlock, Badge, Button,
@@ -39,67 +39,28 @@ export default function Comparison() {
 
   const { rows: categories } = useTable('categories', { order: ['name', { ascending: true }] })
 
-  // Pull the LATEST price per competitor_product. We paginate the recent
-  // window instead of filtering by a (potentially 1500+ item) id list — that
-  // both dodges Supabase's 1000-row-per-request cap AND avoids a 414-length
-  // URL. Keeping the first row seen per cp (rows come newest-first) = latest.
+  // Latest price per competitor_product — computed server-side by the
+  // get_latest_prices() DISTINCT ON RPC (one row per cp) instead of paging the
+  // whole 60-day history to the browser. See fetchLatestPrices() in lib/db.
   useEffect(() => {
     let cancelled = false
     setPriceLoading(true); setPriceErr('')
-    ;(async () => {
-      const from = new Date(); from.setDate(from.getDate() - 60)
-      const PAGE = 1000, seen = {}, suspect = {}
-      let start = 0, err = null, newest = null
-      // Ask for is_suspect; retry without it if the column isn't migrated yet.
-      let cols = 'competitor_product_id, price, currency_code, captured_at, is_suspect'
-      for (let page = 0; page < 50; page++) {
-        let { data, error } = await supabase.from('price_history')
-          .select(cols).gte('captured_at', from.toISOString())
-          .order('captured_at', { ascending: false }).range(start, start + PAGE - 1)
-        if (error && /is_suspect/.test(error.message || '') && cols.includes('is_suspect')) {
-          cols = 'competitor_product_id, price, currency_code, captured_at'
-          page--; continue   // retry this page without the column
-        }
-        if (error) { err = error; break }
-        for (const row of (data || [])) {
-          const id = row.competitor_product_id
-          if (!newest && row.captured_at) newest = row.captured_at   // first row = newest overall
-          if (row.is_suspect) { if (!(id in seen)) suspect[id] = true; continue }  // skip bad reads
-          if (!(id in seen)) seen[id] = row
-        }
-        if (!data || data.length < PAGE) break
-        start += PAGE
-      }
-      if (cancelled) return
-      setPriceLoading(false); setLastRefreshed(new Date())
-      if (err) { setPriceErr(err.message); return }
-      setLatestPrices(seen); setSuspectCps(suspect); setDataFreshAt(newest)
-    })()
+    fetchLatestPrices(60)
+      .then(({ prices, suspect, newest }) => {
+        if (cancelled) return
+        setLatestPrices(prices); setSuspectCps(suspect); setDataFreshAt(newest)
+        setPriceLoading(false); setLastRefreshed(new Date())
+      })
+      .catch(e => { if (!cancelled) { setPriceErr(e.message || 'Fetch failed'); setPriceLoading(false) } })
     return () => { cancelled = true }
   }, [refreshTick])
 
-  // Latest STOCK status per competitor_product (separate table), same pattern.
+  // Latest STOCK status per competitor_product — same server-side approach.
   useEffect(() => {
     let cancelled = false
-    ;(async () => {
-      const from = new Date(); from.setDate(from.getDate() - 60)
-      const PAGE = 1000, seen = {}
-      let start = 0
-      for (let page = 0; page < 50; page++) {
-        const { data, error } = await supabase.from('stock_history')
-          .select('competitor_product_id, in_stock, captured_at')
-          .gte('captured_at', from.toISOString())
-          .order('captured_at', { ascending: false })
-          .range(start, start + PAGE - 1)
-        if (error) return   // stock is a nice-to-have; never block the grid
-        for (const row of (data || [])) {
-          if (!(row.competitor_product_id in seen)) seen[row.competitor_product_id] = row.in_stock
-        }
-        if (!data || data.length < PAGE) break
-        start += PAGE
-      }
-      if (!cancelled) setLatestStock(seen)
-    })()
+    fetchLatestStock(60)
+      .then(stock => { if (!cancelled) setLatestStock(stock) })
+      .catch(() => {})   // stock is a nice-to-have; never block the grid
     return () => { cancelled = true }
   }, [refreshTick])
 
