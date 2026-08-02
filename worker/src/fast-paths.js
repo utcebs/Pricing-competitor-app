@@ -117,14 +117,13 @@ async function fastScrapeXcite(url) {
   const price = typeof raw === 'number' ? raw : parseFloat(raw)
   if (isFinite(price) && price > 0) return { price, inStock, imageUrl, name }
 
-  // meta.product present but no price. Xcite returns a PLACEHOLDER product even
-  // for ghost/expired SKUs — with the numeric SKU as the "name". Only treat it
-  // as a real discontinued/out-of-stock product when the name looks real (has
-  // letters). A digits-only / empty name means the URL is invalid.
-  if (name && /[a-z]/i.test(name)) {
-    return { price: null, inStock: inStock ?? false, exists: true, imageUrl, name }
-  }
-  return null
+  // meta.product IS present (Xcite has this SKU) but there's no price → it's a
+  // real product that's out of stock / discontinued: the page opens, it's not
+  // a 404. Show "out of stock", NOT "invalid link". Genuinely dead URLs have no
+  // meta.product at all (a 404 shell) and already returned null above.
+  // Discontinued items sometimes show the numeric SKU as their name — that's
+  // still a valid product, so we do NOT require the name to contain letters.
+  return { price: null, inStock: inStock ?? false, exists: true, imageUrl, name: name || null }
 }
 
 // ── Best Al-Yousifi (best.com.kw) ─────────────────────────────────
