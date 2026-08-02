@@ -23,6 +23,7 @@ const MatchReview        = lazy(PAGE_IMPORTS['/matches'])
 const Alerts             = lazy(PAGE_IMPORTS['/alerts'])
 const Reports            = lazy(PAGE_IMPORTS['/reports'])
 const Repricing          = lazy(PAGE_IMPORTS['/repricing'])
+const RepriceChecklist   = lazy(PAGE_IMPORTS['/reprice'])
 const Integrations       = lazy(PAGE_IMPORTS['/integrations'])
 
 export default function App() {
@@ -39,6 +40,7 @@ export default function App() {
             <Route path="/prices"              element={<PriceTrends />} />
             <Route path="/prices/new"          element={<PriceEntry />} />
             <Route path="/comparison"          element={<Comparison />} />
+            <Route path="/reprice"             element={<RepriceChecklist />} />
             <Route path="/scrapers"            element={<Scrapers />} />
             <Route path="/matches"             element={<MatchReview />} />
             <Route path="/alerts"              element={<Alerts />} />

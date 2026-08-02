@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { Plus, Pencil, Trash2, Building2, ExternalLink, Upload, Zap, CheckCircle2, AlertTriangle, XCircle, Loader2 } from 'lucide-react'
 import { useTable, saveRow, deleteRow } from '../lib/db'
 import { useAuth } from '../lib/auth'
@@ -12,9 +12,43 @@ import BulkUpload from '../components/BulkUpload'
 export default function Competitors() {
   const { isManager } = useAuth()
   const { rows: competitors, loading, error, refresh } = useTable('competitors', { order: ['name', { ascending: true }] })
+  const { rows: cps } = useTable('competitor_products')
   const [editing, setEditing] = useState(null)
   const [toDelete, setToDelete] = useState(null)
   const [bulkOpen, setBulkOpen] = useState(false)
+
+  // Scrape health: of each competitor's tracked items, how many have a fresh
+  // (last 24h), non-suspect price? Surfaces a broken fast-path immediately.
+  const [freshCps, setFreshCps] = useState(null)  // Set of cp ids with a fresh good price
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      const from = new Date(Date.now() - 24 * 3600 * 1000).toISOString()
+      const set = new Set(); const PAGE = 1000
+      let cols = 'competitor_product_id, is_suspect'
+      for (let start = 0, page = 0; page < 30; page++, start += PAGE) {
+        let { data, error } = await supabase.from('price_history').select(cols)
+          .gte('captured_at', from).order('captured_at', { ascending: false }).range(start, start + PAGE - 1)
+        if (error && /is_suspect/.test(error.message || '') && cols.includes('is_suspect')) { cols = 'competitor_product_id'; page--; continue }
+        if (error) break
+        for (const r of (data || [])) if (!r.is_suspect) set.add(r.competitor_product_id)
+        if (!data || data.length < PAGE) break
+      }
+      if (!cancelled) setFreshCps(set)
+    })()
+    return () => { cancelled = true }
+  }, [])
+
+  const health = useMemo(() => {
+    const by = {}
+    for (const c of cps) {
+      if (!c.product_id) continue
+      const h = by[c.competitor_id] || (by[c.competitor_id] = { linked: 0, priced: 0 })
+      h.linked++
+      if (freshCps && freshCps.has(c.id)) h.priced++
+    }
+    return by
+  }, [cps, freshCps])
 
   return (
     <div>
@@ -44,7 +78,7 @@ export default function Competitors() {
             <table className="w-full">
               <thead className="bg-canvas-100 border-b border-ink-200">
                 <tr>
-                  <Th>Name</Th><Th>Domain</Th><Th>Country</Th><Th>Status</Th>
+                  <Th>Name</Th><Th>Domain</Th><Th>Country</Th><Th>Scrape health</Th><Th>Status</Th>
                   {isManager && <Th></Th>}
                 </tr>
               </thead>
@@ -64,6 +98,7 @@ export default function Competitors() {
                       </a>
                     </Td>
                     <Td className="text-ink-500 text-xs uppercase">{c.country || '—'}</Td>
+                    <Td><HealthChip h={health[c.id]} loading={freshCps === null} /></Td>
                     <Td>{c.is_active ? <Badge variant="green">Active</Badge> : <Badge>Inactive</Badge>}</Td>
                     {isManager && (
                       <Td>
@@ -237,6 +272,23 @@ function CompetitorForm({ open, competitor, onClose, onSaved }) {
         <Button busy={busy} onClick={submit}>{isNew ? 'Create' : 'Save'}</Button>
       </div>
     </Modal>
+  )
+}
+
+/* ── Per-competitor scrape health chip ── */
+function HealthChip({ h, loading }) {
+  if (loading) return <span className="text-[11px] text-ink-400">…</span>
+  if (!h || h.linked === 0) return <span className="text-[11px] text-ink-400">— no tracked items</span>
+  const rate = Math.round((h.priced / h.linked) * 100)
+  const cls = rate >= 90 ? 'text-emerald-700 bg-emerald-50 border-emerald-100'
+    : rate >= 60 ? 'text-amber-700 bg-amber-50 border-amber-100'
+      : 'text-red-700 bg-red-50 border-red-100'
+  return (
+    <span className={`inline-flex items-center gap-1.5 text-[11px] font-semibold px-2 py-0.5 rounded-full border ${cls}`}
+      title={`${h.priced} of ${h.linked} tracked items have a fresh price (last 24h). A low number means a site changed or the fast-path broke.`}>
+      <span className="w-1.5 h-1.5 rounded-full bg-current" />{rate}% priced
+      <span className="font-normal opacity-70">· {h.priced}/{h.linked}</span>
+    </span>
   )
 }
 

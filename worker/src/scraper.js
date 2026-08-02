@@ -26,6 +26,38 @@ function humanDelay(minMs = 3000, maxMs = 5000) {
   return minMs + Math.floor(Math.random() * (maxMs - minMs))
 }
 
+// Price sanity guard: a scraped price that swings beyond this factor vs the
+// last GOOD price is almost always a bad read (the fils / warranty / carousel
+// bugs were 30×–1000× off), so we flag it is_suspect instead of trusting it.
+// A legit clearance rarely exceeds ~3×; tune here if needed.
+const SUSPECT_FACTOR = 3
+
+async function insertPrice(cp, price, runId) {
+  let is_suspect = false
+  try {
+    const { data } = await supabase.from('price_history')
+      .select('price').eq('competitor_product_id', cp.id).eq('is_suspect', false)
+      .order('captured_at', { ascending: false }).limit(1)
+    const last = data?.[0]?.price != null ? Number(data[0].price) : null
+    if (last > 0 && price > 0) {
+      const r = price / last
+      if (r >= SUSPECT_FACTOR || r <= 1 / SUSPECT_FACTOR) is_suspect = true
+    }
+  } catch { /* no history / column not migrated yet → record normally */ }
+  const row = {
+    competitor_product_id: cp.id, price,
+    currency_code: cp.currency_code || 'KWD',
+    source: 'scrape', scrape_run_id: runId, is_suspect,
+  }
+  const { error } = await supabase.from('price_history').insert(row)
+  if (error && /is_suspect/.test(error.message || '')) {
+    // Migration not applied yet — fall back to a plain insert.
+    delete row.is_suspect
+    await supabase.from('price_history').insert(row)
+  }
+  return is_suspect
+}
+
 /**
  * processOneUrl — extracted from the scrape loop so it can run
  * concurrently under Promise.all(). Shares the browser context (cookies
@@ -42,11 +74,7 @@ async function processOneUrl(cp, ctx, run, config, userPriceSel, userStockSel, c
     try {
       const result = await fp.fn(cp.url)
       if (result?.price != null) {
-        await supabase.from('price_history').insert({
-          competitor_product_id: cp.id, price: result.price,
-          currency_code: cp.currency_code || 'KWD',
-          source: 'scrape', scrape_run_id: run.id,
-        })
+        const suspect = await insertPrice(cp, result.price, run.id)
         if (result.inStock !== null && result.inStock !== undefined) {
           await supabase.from('stock_history').insert({
             competitor_product_id: cp.id, in_stock: result.inStock,
@@ -65,10 +93,11 @@ async function processOneUrl(cp, ctx, run, config, userPriceSel, userStockSel, c
           scrape_run_id: run.id, competitor_product_id: cp.id,
           status: 'ok', price_extracted: result.price,
           in_stock_extracted: result.inStock ?? null,
-          error_message: null, duration_ms: Date.now() - started,
+          error_message: suspect ? 'Price flagged suspect (large swing vs last)' : null,
+          duration_ms: Date.now() - started,
         })
         counters.scraped++
-        console.log(`[scraper] ✓ ${cp.name} → ${result.price} (fast-path: ${fp.name}, ${Date.now() - started}ms)`)
+        console.log(`[scraper] ✓ ${cp.name} → ${result.price}${suspect ? ' ⚠SUSPECT' : ''} (fast-path: ${fp.name}, ${Date.now() - started}ms)`)
         return
       }
       if (result?.exists) {
@@ -222,11 +251,7 @@ async function processOneUrl(cp, ctx, run, config, userPriceSel, userStockSel, c
     await page.close(); page = null
 
     if (price != null) {
-      await supabase.from('price_history').insert({
-        competitor_product_id: cp.id, price,
-        currency_code: cp.currency_code || 'KWD',
-        source: 'scrape', scrape_run_id: run.id,
-      })
+      await insertPrice(cp, price, run.id)
     }
     if (inStock !== null) {
       await supabase.from('stock_history').insert({

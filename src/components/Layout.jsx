@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Package, Building2, LineChart, Bell,
   FileBarChart, Settings, LogOut, Link2, DollarSign,
   FolderTree, UserCog, Play, Sparkles, Repeat, Plug, GitCompare,
-  Loader2,
+  Loader2, Target,
 } from 'lucide-react'
 import { useAuth } from '../lib/auth'
 import { setLanguage } from '../lib/i18n'
@@ -18,6 +18,7 @@ import { prefetchRoute } from '../lib/routes'
 const INSIGHTS_NAV = [
   { path: '/',              key: 'nav.dashboard',    icon: LayoutDashboard },
   { path: '/comparison',    key: 'nav.comparison',   icon: GitCompare },
+  { path: '/reprice',       key: 'nav.reprice',      icon: Target },
   { path: '/prices',        key: 'nav.trends',       icon: LineChart },
   { path: '/reports',       key: 'nav.reports',      icon: FileBarChart },
   { path: '/matches',       key: 'nav.matches',      icon: Sparkles },

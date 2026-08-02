@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react'
-import { GitCompare, ArrowUpRight, ArrowDownRight, Minus, ExternalLink, Search, RefreshCw, Zap, Package, Download } from 'lucide-react'
+import { GitCompare, ArrowUpRight, ArrowDownRight, Minus, ExternalLink, Search, RefreshCw, Zap, Package, Download, AlertTriangle, Clock } from 'lucide-react'
 import * as XLSX from 'xlsx'
 import { NavLink } from 'react-router-dom'
 import { supabase } from '../supabaseClient'
@@ -22,7 +22,9 @@ export default function Comparison() {
   const { rows: competitors, loading: cL, error: cErr, refresh: refreshCompetitors } = useTable('competitors', { eq: ['is_active', true], order: ['name', { ascending: true }] })
   const { rows: cps,         loading: lL, error: lErr, refresh: refreshCps } = useTable('competitor_products')
 
-  const [latestPrices, setLatestPrices] = useState({})   // { competitor_product_id: { price, captured_at } }
+  const [latestPrices, setLatestPrices] = useState({})   // { competitor_product_id: { price, captured_at } } — latest NON-suspect
+  const [suspectCps, setSuspectCps] = useState({})       // { competitor_product_id: true } — a recent reading was flagged
+  const [dataFreshAt, setDataFreshAt] = useState(null)   // newest captured_at across all prices
   const [latestStock, setLatestStock] = useState({})     // { competitor_product_id: boolean in_stock }
   const [priceLoading, setPriceLoading] = useState(false)
   const [priceErr, setPriceErr] = useState('')
@@ -46,17 +48,24 @@ export default function Comparison() {
     setPriceLoading(true); setPriceErr('')
     ;(async () => {
       const from = new Date(); from.setDate(from.getDate() - 60)
-      const PAGE = 1000, seen = {}
-      let start = 0, err = null
+      const PAGE = 1000, seen = {}, suspect = {}
+      let start = 0, err = null, newest = null
+      // Ask for is_suspect; retry without it if the column isn't migrated yet.
+      let cols = 'competitor_product_id, price, currency_code, captured_at, is_suspect'
       for (let page = 0; page < 50; page++) {
-        const { data, error } = await supabase.from('price_history')
-          .select('competitor_product_id, price, currency_code, captured_at')
-          .gte('captured_at', from.toISOString())
-          .order('captured_at', { ascending: false })
-          .range(start, start + PAGE - 1)
+        let { data, error } = await supabase.from('price_history')
+          .select(cols).gte('captured_at', from.toISOString())
+          .order('captured_at', { ascending: false }).range(start, start + PAGE - 1)
+        if (error && /is_suspect/.test(error.message || '') && cols.includes('is_suspect')) {
+          cols = 'competitor_product_id, price, currency_code, captured_at'
+          page--; continue   // retry this page without the column
+        }
         if (error) { err = error; break }
         for (const row of (data || [])) {
-          if (!(row.competitor_product_id in seen)) seen[row.competitor_product_id] = row
+          const id = row.competitor_product_id
+          if (!newest && row.captured_at) newest = row.captured_at   // first row = newest overall
+          if (row.is_suspect) { if (!(id in seen)) suspect[id] = true; continue }  // skip bad reads
+          if (!(id in seen)) seen[id] = row
         }
         if (!data || data.length < PAGE) break
         start += PAGE
@@ -64,7 +73,7 @@ export default function Comparison() {
       if (cancelled) return
       setPriceLoading(false); setLastRefreshed(new Date())
       if (err) { setPriceErr(err.message); return }
-      setLatestPrices(seen)
+      setLatestPrices(seen); setSuspectCps(suspect); setDataFreshAt(newest)
     })()
     return () => { cancelled = true }
   }, [refreshTick])
@@ -269,10 +278,11 @@ export default function Comparison() {
         subtitle="Every product side-by-side with every competitor's latest known price. Sort by opportunity to see where your prices are highest relative to the market."
         action={
           <div className="flex items-center gap-2">
-            <div className="text-[11px] text-ink-500 mr-1 tabular-nums hidden sm:block">
-              {lastRefreshed
-                ? `Refreshed ${relTime(lastRefreshed)}`
-                : 'Not refreshed yet'}
+            <div className="text-[11px] text-ink-500 mr-1 tabular-nums hidden sm:flex items-center gap-1.5"
+              title="When the newest competitor price was scraped">
+              {dataFreshAt
+                ? <><Clock size={12} className="text-ink-400" /> Prices {relAge(dataFreshAt)}</>
+                : lastRefreshed ? `Refreshed ${relTime(lastRefreshed)}` : 'Not refreshed yet'}
             </div>
             <Button variant="secondary" onClick={refreshAll} busy={priceLoading} title="Reload from database (uses latest scraped values)">
               <RefreshCw size={14} /> Refresh
@@ -440,20 +450,31 @@ export default function Comparison() {
                         ? ((pc.yourPrice - Number(px)) / Number(px)) * 100
                         : null
                       const oos = latestStock[match.cp.id] === false
+                      const suspect = !!suspectCps[match.cp.id]
+                      const capAt = match.latest?.captured_at
+                      const ageMs = capAt ? Date.now() - new Date(capAt).getTime() : null
+                      const stale = ageMs != null && ageMs > STALE_HOURS * 3600 * 1000
+                      const priceCls = oos ? 'text-amber-600' : stale ? 'text-ink-400' : 'text-ink-800 hover:text-brand-700'
+                      const tip = [
+                        capAt ? `scraped ${relAge(capAt)}` : null,
+                        oos ? 'out of stock — last listed price' : null,
+                        suspect ? 'a recent reading looked wrong and was ignored' : null,
+                      ].filter(Boolean).join(' · ')
                       return (
                         <Td key={c.id} className="text-right tabular-nums">
                           <div className="flex flex-col items-end gap-0.5">
                             <a href={match.cp.url} target="_blank" rel="noopener noreferrer"
-                              title={oos ? 'Out of stock — price shown is the last seen while listed' : undefined}
-                              className={`inline-flex items-center gap-1 group ${
-                                oos ? 'text-amber-600' : 'text-ink-800 hover:text-brand-700'
-                              }`}>
+                              title={tip || undefined}
+                              className={`inline-flex items-center gap-1 group ${priceCls}`}>
+                              {suspect && <AlertTriangle size={11} className="text-amber-500 flex-shrink-0" />}
                               {Number(px).toFixed(3)}
                               <ExternalLink size={9} className="opacity-0 group-hover:opacity-100 transition-opacity" />
                             </a>
                             {oos
                               ? <span className="text-[9px] font-semibold uppercase tracking-wide text-amber-600">out of stock</span>
-                              : cellPct != null && <MiniGap pct={cellPct} />}
+                              : stale
+                                ? <span className="text-[9px] text-ink-400">{relAge(capAt)}</span>
+                                : cellPct != null && <MiniGap pct={cellPct} />}
                           </div>
                         </Td>
                       )
@@ -536,6 +557,18 @@ function MiniGap({ pct }) {
 function symbolFor(code) {
   const map = { KWD:'KD', USD:'$', EUR:'€', AED:'AED', SAR:'SAR', GBP:'£' }
   return map[code] || code || ''
+}
+
+// Prices older than this (with no fresher reading) are shown faded — you're
+// looking at stale data. Ongoing scraping refreshes every ~6h, so 24h = stale.
+const STALE_HOURS = 24
+function relAge(iso) {
+  if (!iso) return ''
+  const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000)
+  if (s < 90) return 'just now'
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`
+  return `${Math.floor(s / 86400)}d ago`
 }
 
 // A stored price is "superseded" when the item has been scraped more recently

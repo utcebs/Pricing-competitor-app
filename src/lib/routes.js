@@ -12,6 +12,7 @@ export const PAGE_IMPORTS = {
   '/prices':              () => import('../pages/PriceTrends'),
   '/prices/new':          () => import('../pages/PriceEntry'),
   '/comparison':          () => import('../pages/Comparison'),
+  '/reprice':             () => import('../pages/RepriceChecklist'),
   '/scrapers':            () => import('../pages/Scrapers'),
   '/matches':             () => import('../pages/MatchReview'),
   '/alerts':              () => import('../pages/Alerts'),
