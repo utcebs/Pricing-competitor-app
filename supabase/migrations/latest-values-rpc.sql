@@ -27,7 +27,7 @@ CREATE INDEX IF NOT EXISTS idx_stock_history_cp_captured
 -- the ⚠ marker without downloading history.
 CREATE OR REPLACE FUNCTION public.get_latest_prices(days integer DEFAULT 60)
 RETURNS TABLE (
-  competitor_product_id uuid,
+  competitor_product_id bigint,
   price                 numeric,
   currency_code         text,
   captured_at           timestamptz,
@@ -66,7 +66,7 @@ $$;
 -- ── Latest stock status per competitor_product ──────────────
 CREATE OR REPLACE FUNCTION public.get_latest_stock(days integer DEFAULT 60)
 RETURNS TABLE (
-  competitor_product_id uuid,
+  competitor_product_id bigint,
   in_stock              boolean,
   captured_at           timestamptz
 )
