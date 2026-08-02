@@ -217,6 +217,113 @@ async function fastScrapeBest(url) {
   return { price: null, inStock: inStock ?? false, exists: true, imageUrl, name }
 }
 
+// ── Generic auto-detect (any competitor, no hand-written fast-path) ─────────
+// Reads a price from a plain fetch using the platform-agnostic signals that
+// MOST e-commerce sites expose, in order of reliability:
+//   1. JSON-LD  (<script type=application/ld+json> Product/offers) — the
+//      schema.org standard Google needs for rich results, so it's everywhere.
+//   2. Shopify  (append .json to /products/{handle}) — works on every Shopify.
+//   3. Meta tags (og:price:amount / product:price:amount / itemprop=price).
+// Returns { notFound:true } on a hard 404 (record not_found, no browser),
+// null when the page loads but nothing was detected (→ browser fallback), and
+// the usual { price | exists } shapes on success. This makes onboarding a new
+// competitor mostly automatic — the browser is only for the rare holdout.
+
+function jsonLdProductNodes(data, out = []) {
+  if (!data || typeof data !== 'object') return out
+  if (Array.isArray(data)) { for (const d of data) jsonLdProductNodes(d, out); return out }
+  const t = data['@type']
+  const isProduct = t === 'Product' || (Array.isArray(t) && t.includes('Product')) ||
+    (typeof t === 'string' && /product/i.test(t))
+  if (isProduct) out.push(data)
+  if (data['@graph']) jsonLdProductNodes(data['@graph'], out)
+  return out
+}
+
+function fromJsonLd(html) {
+  const re = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi
+  let m
+  while ((m = re.exec(html))) {
+    let data
+    try { data = JSON.parse(m[1].trim()) } catch { continue }
+    const prod = jsonLdProductNodes(data).find(p => p.offers) || jsonLdProductNodes(data)[0]
+    if (!prod) continue
+    const offer = Array.isArray(prod.offers) ? prod.offers[0] : prod.offers
+    const rawPrice = offer?.price ?? offer?.lowPrice ?? offer?.priceSpecification?.price
+    const price = parseFloat(String(rawPrice ?? '').replace(/,/g, ''))
+    const name = typeof prod.name === 'string' ? prod.name : null
+    const image = typeof prod.image === 'string' ? prod.image
+      : Array.isArray(prod.image) ? prod.image[0]
+        : prod.image?.url || null
+    const avail = String(offer?.availability || '').toLowerCase()
+    const inStock = /instock|limitedavailability|onlineonly|presale/.test(avail) ? true
+      : /outofstock|soldout|discontinued/.test(avail) ? false : null
+    if (isFinite(price) && price > 0) return { price, inStock, imageUrl: image, name }
+    if (offer) return { price: null, inStock: inStock ?? false, exists: true, imageUrl: image, name }
+  }
+  return null
+}
+
+async function fromShopify(url, html) {
+  if (!/cdn\.shopify\.com|myshopify\.com|Shopify\.theme|"Shopify"/i.test(html)) return null
+  let u; try { u = new URL(url) } catch { return null }
+  const path = u.pathname.match(/\/products\/[^/?#]+/i)
+  if (!path) return null
+  try {
+    const r = await fetch(`${u.origin}${path[0]}.json`, {
+      headers: { 'user-agent': FETCH_UA, accept: 'application/json' },
+      signal: AbortSignal.timeout(12_000),
+    })
+    if (!r.ok) return null
+    const prod = (await r.json())?.product
+    if (!prod) return null
+    const variant = (prod.variants || []).find(v => v.available) || prod.variants?.[0]
+    const price = parseFloat(String(variant?.price ?? '').replace(/,/g, ''))
+    const inStock = (prod.variants || []).some(v => v.available)
+    const image = prod.image?.src || prod.images?.[0]?.src || null
+    const name = prod.title || null
+    if (isFinite(price) && price > 0) return { price, inStock, imageUrl: image, name }
+    return { price: null, inStock, exists: true, imageUrl: image, name }
+  } catch { return null }
+}
+
+function fromMeta(html) {
+  const attr = (re) => (html.match(re) || [])[1] || null
+  const raw =
+    attr(/<meta[^>]+(?:property|name)=["'](?:og:price:amount|product:price:amount)["'][^>]+content=["']([\d.,]+)["']/i) ||
+    attr(/<meta[^>]+content=["']([\d.,]+)["'][^>]+(?:property|name)=["'](?:og:price:amount|product:price:amount)["']/i) ||
+    attr(/itemprop=["']price["'][^>]+content=["']([\d.,]+)["']/i) ||
+    attr(/content=["']([\d.,]+)["'][^>]+itemprop=["']price["']/i)
+  if (!raw) return null
+  const price = parseFloat(raw.replace(/,/g, ''))
+  if (!isFinite(price) || price <= 0) return null
+  const name = attr(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)
+  const image = attr(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)
+  const avail = attr(/(?:property|name)=["'](?:og:availability|product:availability)["'][^>]+content=["']([^"']+)["']/i)
+  const inStock = avail ? (/instock|in stock/i.test(avail) ? true : /outofstock|out of stock|sold ?out/i.test(avail) ? false : null) : null
+  return { price, inStock, imageUrl: image, name }
+}
+
+async function fastScrapeGeneric(url) {
+  let res
+  try {
+    res = await fetch(url, {
+      headers: {
+        'user-agent': FETCH_UA,
+        accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'accept-language': 'en-US,en;q=0.9,ar;q=0.8',
+      },
+      redirect: 'follow',
+      signal: AbortSignal.timeout(15_000),
+    })
+  } catch { return null }   // network error → let the browser try
+  if (res.status === 404 || res.status === 410) return { notFound: true }
+  if (!res.ok) return null  // 403 / 5xx (bot-blocked) → browser + proxy might get it
+  const html = await res.text()
+
+  return (await fromShopify(url, html)) || fromJsonLd(html) || fromMeta(html) || null
+}
+
 const FAST_PATHS = [
   {
     name: 'eureka-algolia',
@@ -232,6 +339,15 @@ const FAST_PATHS = [
     name: 'best-occ',
     match: (url) => /(?:^|\.)best\.com\.kw$/i.test(new URL(url).hostname),
     fn: fastScrapeBest,
+  },
+  // Lowest priority: matches ANY url the specific paths above didn't claim.
+  // isGeneric → a null result falls through to the browser instead of being
+  // treated as an authoritative "not found".
+  {
+    name: 'generic-auto',
+    match: () => true,
+    fn: fastScrapeGeneric,
+    isGeneric: true,
   },
 ]
 

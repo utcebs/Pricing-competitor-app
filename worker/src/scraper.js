@@ -94,32 +94,44 @@ async function processOneUrl(cp, ctx, run, config, userPriceSel, userStockSel, c
         console.log(`[scraper] ○ ${cp.name}: valid, no price (${fp.name}, stock=${result.inStock})`)
         return
       }
-      // Fast-path ran and the product does NOT exist (dead/removed URL). For
-      // fast-path competitors the API/SSR is authoritative, so record not_found
-      // and STOP — do NOT launch a browser (Chromium-per-invalid-URL OOM-ed the
-      // 512MB worker, and a browser can't find what the API says is gone).
-      await supabase.from('competitor_products')
-        .update({ last_seen_at: new Date().toISOString() }).eq('id', cp.id)
-      await supabase.from('scrape_jobs').insert({
-        scrape_run_id: run.id, competitor_product_id: cp.id, status: 'not_found',
-        error_message: `Fast-path (${fp.name}): product not found — URL invalid or removed`,
-        duration_ms: Date.now() - started,
-      })
-      counters.notFound++
-      console.log(`[scraper] ✗ ${cp.name}: ${fp.name} → not found (invalid URL)`)
-      return
+      // No price and product doesn't "exist".
+      if (fp.isGeneric && !result?.notFound) {
+        // The GENERIC auto-detector found nothing on a live page (not a hard
+        // 404) → this is the rare holdout with no readable API. Fall THROUGH to
+        // the browser below (do not return, do not record not_found yet).
+        console.log(`[scraper] ${fp.name}: no price auto-detected for ${cp.name} — trying browser`)
+      } else {
+        // A specific/authoritative fast-path returned nothing, OR the generic
+        // path reported a hard 404 → record not_found and STOP (no browser: a
+        // browser can't find what the source says is gone, and per-URL Chromium
+        // launches OOM-ed the 512MB worker).
+        await supabase.from('competitor_products')
+          .update({ last_seen_at: new Date().toISOString() }).eq('id', cp.id)
+        await supabase.from('scrape_jobs').insert({
+          scrape_run_id: run.id, competitor_product_id: cp.id, status: 'not_found',
+          error_message: `Fast-path (${fp.name}): product not found — URL invalid or removed`,
+          duration_ms: Date.now() - started,
+        })
+        counters.notFound++
+        console.log(`[scraper] ✗ ${cp.name}: ${fp.name} → not found (invalid URL)`)
+        return
+      }
     } catch (e) {
-      // Transient fast-path error (network/timeout). Record and move on — the
-      // next scheduled scrape retries via the fast-path, which is far cheaper
-      // and safer than spinning up Chromium under memory pressure.
-      await supabase.from('scrape_jobs').insert({
-        scrape_run_id: run.id, competitor_product_id: cp.id, status: 'error',
-        error_message: `Fast-path ${fp.name} error: ${e.message}`,
-        duration_ms: Date.now() - started,
-      })
-      counters.failed++
-      console.log(`[scraper] fast-path ${fp.name} error for ${cp.name}: ${e.message}`)
-      return
+      if (!fp.isGeneric) {
+        // Specific fast-path error (network/timeout) → record and move on. The
+        // next scheduled scrape retries via the fast-path, cheaper and safer
+        // than spinning up Chromium under memory pressure.
+        await supabase.from('scrape_jobs').insert({
+          scrape_run_id: run.id, competitor_product_id: cp.id, status: 'error',
+          error_message: `Fast-path ${fp.name} error: ${e.message}`,
+          duration_ms: Date.now() - started,
+        })
+        counters.failed++
+        console.log(`[scraper] fast-path ${fp.name} error for ${cp.name}: ${e.message}`)
+        return
+      }
+      // Generic path threw → fall through to the browser.
+      console.log(`[scraper] ${fp.name} error for ${cp.name}: ${e.message} — trying browser`)
     }
   }
 
