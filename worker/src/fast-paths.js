@@ -34,61 +34,36 @@ const EUREKA_INDEX          = 'instant_records'
 async function fastScrapeEureka(url) {
   const idMatch = url.match(/\/products\/details\/(\d+)/i)
   if (!idMatch) return null
-  const objectId = idMatch[1]
+  const id = idMatch[1]
 
+  // Eureka's product-detail API returns the real price (clp) + stock (aq) for
+  // EVERY product — including ones missing from the Algolia search index (which
+  // only holds in-stock items; that gap made priced-but-out-of-stock products
+  // show as a blank "out of stock"). `singleItem` comes back as a JSON string.
+  //   clp — cash list price (selling)      lp  — strike-through original
+  //   aq  — available quantity (>0 in stock)   in — item name
+  //   dip — image filename on their CDN
   const res = await fetch(
-    `https://${EUREKA_ALGOLIA_APP_ID}-dsn.algolia.net/1/indexes/${EUREKA_INDEX}/query`,
-    {
-      method: 'POST',
-      headers: {
-        'X-Algolia-API-Key': EUREKA_ALGOLIA_KEY,
-        'X-Algolia-Application-Id': EUREKA_ALGOLIA_APP_ID,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        params: `query=&filters=objectID%3A${objectId}&hitsPerPage=1`,
-      }),
-      signal: AbortSignal.timeout(10_000),
-    }
+    `https://www.eureka.com.kw/list/getsngitmdet?id=${id}&lang=true&Itemtype=&ImageType=Product`,
+    { headers: { 'user-agent': FETCH_UA, accept: 'application/json' }, signal: AbortSignal.timeout(15_000) }
   )
   if (!res.ok) return null
-  const data = await res.json()
-  const hit = data.hits?.[0]
+  const data = await res.json().catch(() => null)
+  let raw = data?.singleItem
+  if (typeof raw === 'string') { try { raw = JSON.parse(raw) } catch { raw = null } }
+  const item = Array.isArray(raw) ? raw[0] : raw
+  if (!item || !(item.in || item.Id)) return null   // no product → invalid / removed
 
-  if (hit) {
-    // Eureka field map:
-    //   clprc  — cash list price (what customers pay) — preferred
-    //   lprc   — strike-through original price (fallback)
-    //   avaqt  — available quantity (>0 = in stock)
-    //   ipic   — product image filename in their CDN
-    //   itmn   — product name (canonical)
-    const price = typeof hit.clprc === 'number' && hit.clprc > 0
-      ? hit.clprc
-      : typeof hit.lprc === 'number' && hit.lprc > 0
-        ? hit.lprc
-        : null
-    const inStock = typeof hit.avaqt === 'number' ? hit.avaqt > 0 : null
-    const imageUrl = hit.ipic
-      ? `https://cdnimage.eureka.com.kw/uploaded_images/products/${hit.ipic}`
-      : null
-    if (price != null) return { price, inStock, imageUrl, name: hit.itmn || null }
-    // In the index but no price → valid, treat as out of stock.
-    return { price: null, inStock: inStock ?? false, exists: true, imageUrl, name: hit.itmn || null }
-  }
+  const clp = parseFloat(String(item.clp ?? '').replace(/,/g, ''))
+  const lp = parseFloat(String(item.lp ?? '').replace(/,/g, ''))
+  const price = isFinite(clp) && clp > 0 ? clp : (isFinite(lp) && lp > 0 ? lp : null)
+  const inStock = item.aq != null && item.aq !== '' ? parseInt(item.aq, 10) > 0 : null
+  const name = item.in || null
+  const imageUrl = item.dip ? `https://cdnimage.eureka.com.kw/uploaded_images/products/${item.dip}` : null
 
-  // No Algolia hit. The index only holds IN-STOCK items, so this may still be
-  // a VALID out-of-stock product page (not a dead URL). Eureka SSRs the product
-  // name into <title> for real products; removed/invalid ones get a "," title.
-  try {
-    const html = await (await fetch(url, {
-      headers: { 'user-agent': FETCH_UA }, signal: AbortSignal.timeout(15_000),
-    })).text()
-    const title = (html.match(/<title>([^<]*)<\/title>/i)?.[1] || '').trim()
-    if (title.replace(/[\s,]/g, '').length > 2) {
-      return { price: null, inStock: false, exists: true, name: title.split(/[–|]/)[0].trim() || null }
-    }
-  } catch { /* fall through to invalid */ }
-  return null   // truly invalid / removed
+  if (price != null) return { price, inStock, imageUrl, name }
+  // Valid product but genuinely no price → out of stock / price on request.
+  return { price: null, inStock: inStock ?? false, exists: true, imageUrl, name }
 }
 
 // ── Xcite (xcite.com) ─────────────────────────────────────────────
