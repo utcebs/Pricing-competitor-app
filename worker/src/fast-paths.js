@@ -321,7 +321,10 @@ async function fastScrapeGeneric(url) {
   if (!res.ok) return null  // 403 / 5xx (bot-blocked) → browser + proxy might get it
   const html = await res.text()
 
-  return (await fromShopify(url, html)) || fromJsonLd(html) || fromMeta(html) || null
+  const shop = await fromShopify(url, html); if (shop) return { ...shop, via: 'shopify' }
+  const ld = fromJsonLd(html);              if (ld)   return { ...ld,   via: 'json-ld' }
+  const meta = fromMeta(html);              if (meta) return { ...meta, via: 'meta' }
+  return null
 }
 
 const FAST_PATHS = [
@@ -356,5 +359,29 @@ export function getFastPath(url) {
     return FAST_PATHS.find(fp => fp.match(url)) || null
   } catch {
     return null
+  }
+}
+
+/**
+ * probeUrl — test whether a competitor URL can be scraped browser-free, and by
+ * which method. Used by the "Test compatibility" button when adding a
+ * competitor. Returns a small report:
+ *   { ok, method, price, inStock, outOfStock, invalid, needsBrowser, name, error }
+ */
+export async function probeUrl(url) {
+  let host
+  try { host = new URL(url).hostname.replace(/^www\./, '') } catch { return { ok: false, reason: 'bad-url' } }
+  const fp = getFastPath(url)   // generic-auto always matches, so fp is set
+  try {
+    const r = await fp.fn(url)
+    const method = r?.via ? `api:${r.via}` : `api:${fp.name}`
+    if (r?.notFound) return { ok: false, invalid: true, method: fp.name, needsBrowser: false, host }
+    if (r?.price != null) return { ok: true, method, price: r.price, inStock: r.inStock, name: r.name || null, needsBrowser: false, host }
+    if (r?.exists) return { ok: true, method, price: null, outOfStock: true, inStock: r.inStock, name: r.name || null, needsBrowser: false, host }
+    // null result:
+    if (fp.isGeneric) return { ok: false, needsBrowser: true, method: 'browser', host }
+    return { ok: false, invalid: true, method: fp.name, needsBrowser: false, host }
+  } catch (e) {
+    return { ok: false, error: e.message, needsBrowser: !!fp.isGeneric, host }
   }
 }

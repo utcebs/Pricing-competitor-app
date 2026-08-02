@@ -2,6 +2,7 @@ import 'dotenv/config'
 import cron from 'node-cron'
 import { supabase } from './supabase.js'
 import { runScrapeJob } from './scraper.js'
+import { probeUrl } from './fast-paths.js'
 import { checkAlertRules, sendDigestEmails } from './alerts.js'
 import { evaluateRepricingRules } from './repricing.js'
 import { syncApprovedProposals } from './sync.js'
@@ -47,6 +48,10 @@ async function tick() {
       .select('id')
     if (stuck?.length) console.log(`[worker] re-queued ${stuck.length} stuck run(s)`)
 
+    // Compatibility probes first — they're user-facing (someone is waiting on
+    // the "Test URL" result) and cheap, so answer them promptly.
+    await processProbeJobs()
+
     const { data: queued } = await supabase
       .from('scrape_runs')
       .select('*')
@@ -68,6 +73,23 @@ async function tick() {
     console.error('[worker] tick error', e)
   }
   return processed
+}
+
+// Answer queued "Test compatibility" probes: run probeUrl() and write the
+// report back so the UI can show how a competitor URL would be scraped.
+async function processProbeJobs() {
+  const { data: jobs } = await supabase
+    .from('probe_jobs').select('id, url').eq('status', 'queued')
+    .order('created_at', { ascending: true }).limit(5)
+  for (const job of jobs || []) {
+    let result
+    try { result = await probeUrl(job.url) }
+    catch (e) { result = { ok: false, error: e.message } }
+    await supabase.from('probe_jobs')
+      .update({ status: result?.error ? 'error' : 'done', result })
+      .eq('id', job.id)
+    console.log(`[worker] probe ${job.url.slice(0, 50)} → ${result?.method || result?.error || 'null'}`)
+  }
 }
 
 // Cron 1 — scheduled scrape fanout every 6 hours

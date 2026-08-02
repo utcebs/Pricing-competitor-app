@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { Plus, Pencil, Trash2, Building2, ExternalLink, Upload } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import { Plus, Pencil, Trash2, Building2, ExternalLink, Upload, Zap, CheckCircle2, AlertTriangle, XCircle, Loader2 } from 'lucide-react'
 import { useTable, saveRow, deleteRow } from '../lib/db'
 import { useAuth } from '../lib/auth'
 import { supabase } from '../supabaseClient'
@@ -212,6 +212,9 @@ function CompetitorForm({ open, competitor, onClose, onSaved }) {
           </label>
         </div>
         <div className="md:col-span-2">
+          <ProbeTester competitorId={competitor?.id} />
+        </div>
+        <div className="md:col-span-2">
           <Field label="Notes">
             <textarea className={textareaCls} value={form.notes || ''} onChange={e => set('notes', e.target.value)} />
           </Field>
@@ -234,6 +237,114 @@ function CompetitorForm({ open, competitor, onClose, onSaved }) {
         <Button busy={busy} onClick={submit}>{isNew ? 'Create' : 'Save'}</Button>
       </div>
     </Modal>
+  )
+}
+
+/* ── Compatibility probe: test a sample product URL before committing ── */
+function prettyMethod(m) {
+  if (!m) return ''
+  const s = m.replace(/^api:/, '')
+  const map = {
+    'generic:json-ld': 'JSON-LD (schema.org)',
+    'generic:shopify': 'Shopify API',
+    'generic:meta': 'meta tags',
+    'xcite-nextdata': 'Xcite (built-in)',
+    'eureka-algolia': 'Eureka API (built-in)',
+    'best-occ': 'Best Al-Yousifi API (built-in)',
+    'browser': 'headless browser',
+  }
+  return map[s] || s
+}
+
+function ProbeTester({ competitorId }) {
+  const { user } = useAuth()
+  const [url, setUrl] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState(null)   // probe result object
+  const [err, setErr] = useState('')
+  const timer = useRef(null)
+  useEffect(() => () => clearTimeout(timer.current), [])
+
+  const run = async () => {
+    if (!url.trim()) return
+    setBusy(true); setErr(''); setResult(null)
+    const { data, error } = await supabase.from('probe_jobs')
+      .insert({ url: url.trim(), competitor_id: competitorId || null, triggered_by: user?.id })
+      .select('id').single()
+    if (error) {
+      setBusy(false)
+      setErr(/probe_jobs/.test(error.message || '')
+        ? 'Probe not ready — an admin needs to run supabase/migrations/probe-jobs.sql.'
+        : error.message)
+      return
+    }
+    let tries = 0
+    const poll = async () => {
+      tries++
+      const { data: job } = await supabase.from('probe_jobs').select('status,result').eq('id', data.id).single()
+      if (job && (job.status === 'done' || job.status === 'error')) { setBusy(false); setResult(job.result || {}); return }
+      if (tries > 40) { setBusy(false); setErr('Timed out — is the worker running?'); return }
+      timer.current = setTimeout(poll, 2000)
+    }
+    poll()
+  }
+
+  // Map result → banner style
+  let banner = null
+  if (result) {
+    if (result.ok && result.price != null) {
+      banner = { tone: 'good', Icon: CheckCircle2, title: `Auto-detected — no browser needed`,
+        body: `Read via ${prettyMethod(result.method)} · price KD ${Number(result.price).toFixed(3)}${result.inStock === false ? ' · out of stock' : ''}` }
+    } else if (result.ok && result.outOfStock) {
+      banner = { tone: 'warn', Icon: AlertTriangle, title: 'Valid product — currently out of stock',
+        body: `Detected via ${prettyMethod(result.method)}, but no price shown right now.` }
+    } else if (result.needsBrowser) {
+      banner = { tone: 'warn', Icon: AlertTriangle, title: 'No API detected — will use the browser',
+        body: 'The page loads but exposes no readable price API. Scraping will fall back to a headless browser (slower, and may need a proxy for a bot-protected site).' }
+    } else if (result.invalid) {
+      banner = { tone: 'crit', Icon: XCircle, title: 'Product not found',
+        body: 'That URL 404s or has no product — it would show as an invalid link.' }
+    } else if (result.error) {
+      banner = { tone: 'crit', Icon: XCircle, title: 'Probe failed', body: result.error }
+    } else {
+      banner = { tone: 'warn', Icon: AlertTriangle, title: 'Undetermined', body: 'Could not read a price.' }
+    }
+  }
+  const toneCls = {
+    good: 'bg-emerald-50 border-emerald-200 text-emerald-800',
+    warn: 'bg-amber-50 border-amber-200 text-amber-800',
+    crit: 'bg-red-50 border-red-200 text-red-800',
+  }
+
+  return (
+    <div className="rounded-xl border border-brand-100 bg-brand-50/40 p-4">
+      <div className="flex items-center gap-2 mb-1">
+        <Zap size={14} className="text-brand-600" />
+        <span className="text-[13px] font-semibold text-ink-900">Test compatibility</span>
+      </div>
+      <p className="text-[11.5px] text-ink-500 mb-3 leading-relaxed">
+        Paste any product URL from this competitor to check — before you add products — whether we can read its price automatically (no browser) or it'll need the slower browser path.
+      </p>
+      <div className="flex items-center gap-2">
+        <input type="url" className={`${inputCls} flex-1`} placeholder="https://competitor.com/product-page"
+          value={url} onChange={e => setUrl(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); run() } }} />
+        <Button variant="secondary" onClick={run} disabled={busy || !url.trim()}>
+          {busy ? <><Loader2 size={14} className="animate-spin" /> Testing…</> : <><Zap size={14} /> Test</>}
+        </Button>
+      </div>
+      {busy && <div className="text-[11.5px] text-ink-500 mt-2">Queued to the worker — result in a few seconds…</div>}
+      {err && <div className="text-[12px] text-red-600 mt-2">{err}</div>}
+      {banner && (
+        <div className={`mt-3 rounded-lg border px-3 py-2.5 flex items-start gap-2.5 ${toneCls[banner.tone]}`}>
+          <banner.Icon size={16} className="flex-shrink-0 mt-0.5" />
+          <div>
+            <div className="text-[12.5px] font-semibold">{banner.title}</div>
+            <div className="text-[11.5px] mt-0.5 leading-relaxed">{banner.body}</div>
+          </div>
+        </div>
+      )}
+    </div>
   )
 }
 
