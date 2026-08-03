@@ -87,18 +87,27 @@ export async function deleteRow(table, id) {
  *           newest:  iso string | null } // newest captured_at across all cps
  */
 export async function fetchLatestPrices(days = 60) {
-  const { data, error } = await supabase.rpc('get_latest_prices', { days })
-  if (!error && Array.isArray(data)) {
-    const prices = {}, suspect = {}
-    let newest = null
-    for (const r of data) {
+  // IMPORTANT: PostgREST caps a single response at 1000 rows, and that applies
+  // to set-returning RPCs too. With >1000 priced competitor_products the RPC
+  // would silently return only the first 1000 and the rest would show as
+  // "invalid link". So we page the RPC with range() exactly like a table.
+  const PAGE = 1000
+  const prices = {}, suspect = {}
+  let newest = null, start = 0
+  for (let page = 0; page < 50; page++) {
+    const { data, error } = await supabase
+      .rpc('get_latest_prices', { days })
+      .range(start, start + PAGE - 1)
+    if (error) return legacyLatestPrices(days)   // RPC missing/errored → old path
+    for (const r of (data || [])) {
       prices[r.competitor_product_id] = r
       if (r.is_suspect) suspect[r.competitor_product_id] = true
       if (r.captured_at && (!newest || r.captured_at > newest)) newest = r.captured_at
     }
-    return { prices, suspect, newest }
+    if (!data || data.length < PAGE) break
+    start += PAGE
   }
-  return legacyLatestPrices(days)   // RPC missing / errored → old path
+  return { prices, suspect, newest }
 }
 
 // Legacy: page the recent window newest-first and keep the first row seen per
@@ -135,12 +144,24 @@ async function legacyLatestPrices(days) {
  * Returns { [cpId]: boolean }.
  */
 export async function fetchLatestStock(days = 60) {
-  const { data, error } = await supabase.rpc('get_latest_stock', { days })
-  if (!error && Array.isArray(data)) {
-    const stock = {}
-    for (const r of data) stock[r.competitor_product_id] = r.in_stock
-    return stock
+  // Same 1000-row cap applies — page the RPC with range().
+  const PAGE = 1000
+  const stock = {}
+  let start = 0
+  for (let page = 0; page < 50; page++) {
+    const { data, error } = await supabase
+      .rpc('get_latest_stock', { days })
+      .range(start, start + PAGE - 1)
+    if (error) return legacyLatestStock(days)   // RPC missing/errored → old path
+    for (const r of (data || [])) stock[r.competitor_product_id] = r.in_stock
+    if (!data || data.length < PAGE) break
+    start += PAGE
   }
+  return stock
+}
+
+// Legacy stock paginator — safety net for un-migrated environments.
+async function legacyLatestStock(days) {
   const from = new Date(); from.setDate(from.getDate() - days)
   const PAGE = 1000, stock = {}
   let start = 0

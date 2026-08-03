@@ -60,7 +60,8 @@ AS $$
   SELECT g.competitor_product_id, g.price, g.currency_code, g.captured_at,
          COALESCE(n.is_suspect, false)
   FROM good g
-  LEFT JOIN newest n USING (competitor_product_id);
+  LEFT JOIN newest n USING (competitor_product_id)
+  ORDER BY g.competitor_product_id;   -- stable order so client range() paging is deterministic
 $$;
 
 -- ── Latest stock status per competitor_product ──────────────
