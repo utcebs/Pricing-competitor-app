@@ -76,6 +76,30 @@ export async function deleteRow(table, id) {
 }
 
 /**
+ * fetchAll — run any query to completion, paging past PostgREST's 1000-row
+ * response cap. This is the ONE safe primitive for "give me every matching
+ * row": never write a bare `.select()` that could return >1000 rows — use
+ * this so results are never silently truncated (the bug that made priced
+ * products show as "invalid link").
+ *
+ * Pass a FACTORY that builds a fresh query each call (so range() can be
+ * re-applied per page). Works for both tables and set-returning rpc()s:
+ *   const rows = await fetchAll(() =>
+ *     supabase.from('scrape_jobs').select('*').eq('scrape_run_id', id))
+ */
+export async function fetchAll(makeQuery, { pageSize = 1000, maxPages = 50 } = {}) {
+  let all = [], start = 0
+  for (let page = 0; page < maxPages; page++) {
+    const { data, error } = await makeQuery().range(start, start + pageSize - 1)
+    if (error) throw error
+    all = all.concat(data || [])
+    if (!data || data.length < pageSize) break
+    start += pageSize
+  }
+  return all
+}
+
+/**
  * fetchLatestPrices — latest price per competitor_product, computed
  * SERVER-SIDE via the get_latest_prices() DISTINCT ON RPC. One row per cp
  * instead of paging the whole history and deduping in the browser.

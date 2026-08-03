@@ -5,7 +5,7 @@ import {
   Sparkles,
 } from 'lucide-react'
 import { supabase } from '../supabaseClient'
-import { useTable } from '../lib/db'
+import { useTable, fetchAll } from '../lib/db'
 import { useAuth } from '../lib/auth'
 import {
   PageHeader, Card, Button, Modal, Empty, LoadingBlock, ErrorBlock, Badge,
@@ -365,14 +365,16 @@ function RunDetailModal({ runId, run, competitor, onClose }) {
   useEffect(() => {
     if (!runId) return
     setLoading(true); setExpandedSample(null)
+    // fetchAll pages past the 1000-row cap — a run for a big competitor can
+    // have >1000 jobs / products, which would otherwise be silently truncated.
     Promise.all([
-      supabase.from('scrape_jobs').select('*').eq('scrape_run_id', runId).order('created_at', { ascending: true }),
-      supabase.from('competitor_products').select('id,name,url').eq('competitor_id', run?.competitor_id || 0),
-    ]).then(([jobsRes, cpsRes]) => {
-      setJobs(jobsRes.data || [])
-      setCpMap(Object.fromEntries((cpsRes.data || []).map(c => [c.id, c])))
+      fetchAll(() => supabase.from('scrape_jobs').select('*').eq('scrape_run_id', runId).order('created_at', { ascending: true })),
+      fetchAll(() => supabase.from('competitor_products').select('id,name,url').eq('competitor_id', run?.competitor_id || 0)),
+    ]).then(([jobsRows, cpsRows]) => {
+      setJobs(jobsRows)
+      setCpMap(Object.fromEntries(cpsRows.map(c => [c.id, c])))
       setLoading(false)
-    })
+    }).catch(() => setLoading(false))
   }, [runId, run?.competitor_id])
 
   if (!runId) return null
