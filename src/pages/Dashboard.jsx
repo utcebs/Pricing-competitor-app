@@ -1,632 +1,578 @@
 import { useEffect, useState, useMemo } from 'react'
-import { Link, NavLink } from 'react-router-dom'
+import { NavLink } from 'react-router-dom'
 import {
-  Package, Building2, LineChart, Play, Sparkles, TrendingUp, TrendingDown,
-  ArrowUpRight, ArrowDownRight, AlertTriangle, CheckCircle2, Activity,
-  Layers, Zap, Clock, ArrowRight, Radio, Target, Crown, Scale,
-  Flame, ShieldCheck, ClipboardList, ChevronRight, Percent,
+  PieChart, Pie, Cell, ResponsiveContainer, LineChart, Line, XAxis, YAxis,
+  CartesianGrid, Tooltip, Legend, BarChart, Bar,
+} from 'recharts'
+import {
+  Package, Building2, ShieldCheck, Flame, Scale, PackageX,
+  TrendingUp, TrendingDown, ArrowRight, ArrowUpRight, ArrowDownRight,
+  Clock, Radio,
 } from 'lucide-react'
 import { supabase } from '../supabaseClient'
-import { useTable, fetchLatestPrices } from '../lib/db'
+import { useTable, fetchLatestPrices, fetchLatestStock } from '../lib/db'
 import { useAuth } from '../lib/auth'
-import { PageHeader, Card, Button, LoadingBlock, Badge } from '../components/UI'
+import { PageHeader, Card, LoadingBlock } from '../components/UI'
 
 /**
- * Suggest a price that:
- *   1. Beats the cheapest rival by 1 fils where possible
- *   2. Never sells below cost
- *   3. Honors an absolute min_price floor if set
- *   4. Keeps gross margin ≥ target_margin (margin = (price − cost) / price)
- * If undercutting the rival would violate any floor, we return the highest
- * applicable floor and flag mode='floor' so the UI can explain why.
+ * Suggest a price that beats the cheapest rival by 1 fils, never below the
+ * cost/margin/min floors. Exported — the Business Insights page imports it.
  */
 export function computeSuggestion({ minRival, costPrice, targetMarginPct, minPriceFloor }) {
   if (minRival == null) return null
-
   const marginFloor =
     costPrice != null && targetMarginPct != null && targetMarginPct < 100
-      ? costPrice / (1 - targetMarginPct / 100)
-      : null
-
+      ? costPrice / (1 - targetMarginPct / 100) : null
   const floors = [marginFloor, minPriceFloor, costPrice].filter(v => v != null && v >= 0)
   const effectiveFloor = floors.length ? Math.max(...floors) : 0
   const activeFloor = floors.length
     ? (marginFloor === effectiveFloor ? 'margin'
-      : minPriceFloor === effectiveFloor ? 'min'
-      : 'cost')
+      : minPriceFloor === effectiveFloor ? 'min' : 'cost')
     : null
-
   const undercut = minRival - 0.001
   const canUndercut = undercut >= effectiveFloor
   const price = canUndercut ? undercut : effectiveFloor
   const mode = canUndercut ? 'competitive' : 'floor'
   const achievedMarginPct =
     costPrice != null && price > 0 ? ((price - costPrice) / price) * 100 : null
-
   return { price, mode, achievedMarginPct, activeFloor, effectiveFloor }
 }
 
+// Position palette — matches the app's semantic colours.
+const POS = {
+  cheapest: { label: 'Cheapest',     color: '#10b981' },  // emerald — you win
+  match:    { label: 'Match Price',  color: '#3b82f6' },  // blue — parity
+  below:    { label: 'Below Market', color: '#f59e0b' },  // amber — under avg
+  above:    { label: 'Above Market', color: '#ef4444' },  // red — you're pricier
+}
+const STOCK = { in: '#10b981', out: '#ef4444' }
+
 /**
- * Dashboard — the category manager's morning coffee view.
- *
- * The math (all client-side after a handful of table reads):
- *   For each product with a current_price and ≥1 scraped competitor price
- *   in the last 60 days: compute gap_vs_cheapest and gap_vs_average.
- *   Positive gap = you're pricier. Negative = you're cheaper.
- *
- * The dashboard organises those numbers into one screen a manager can
- * scan in 15 seconds and act on in 30.
+ * Dashboard — an executive, Power-BI-style competitive-pricing report.
+ * Every figure is computed live from the latest scraped prices/stock, so it
+ * refreshes on every load. See the four AnswerCards on /business-insights for
+ * the deeper "what should I do" analysis.
  */
 export default function Dashboard() {
   const { profile } = useAuth()
-  const { rows: products } = useTable('products', { order: ['name', { ascending: true }] })
+  const { rows: products, loading: pLoading } = useTable('products', { order: ['name', { ascending: true }] })
   const { rows: competitors } = useTable('competitors', { eq: ['is_active', true] })
   const { rows: cps } = useTable('competitor_products', { eq: ['is_active', true] })
   const { rows: categories } = useTable('categories')
 
-  const [latestPrices, setLatestPrices] = useState({})   // cp_id → { price, captured_at }
-  const [priceHistory, setPriceHistory] = useState([])   // recent moves
+  const [latestPrices, setLatestPrices] = useState({})
+  const [latestStock, setLatestStock] = useState({})
+  const [priceHistory, setPriceHistory] = useState([])
+  const [trend, setTrend] = useState([])
   const [scrapeRuns, setScrapeRuns] = useState([])
-  const [pendingProposals, setPendingProposals] = useState(0)
-  const [loading, setLoading] = useState(true)
 
-  // Latest price per competitor_product — server-side DISTINCT ON RPC. Complete
-  // (one row per cp, no matter how deep the history) and fast — replaces the old
-  // 1500-UUID `.in()` filter that built a multi-KB URL and could miss cps.
-  useEffect(() => {
-    fetchLatestPrices(60)
-      .then(({ prices }) => setLatestPrices(prices))
-      .catch(() => setLatestPrices({}))
-  }, [])
+  useEffect(() => { fetchLatestPrices(60).then(({ prices }) => setLatestPrices(prices)).catch(() => setLatestPrices({})) }, [])
+  useEffect(() => { fetchLatestStock(60).then(setLatestStock).catch(() => setLatestStock({})) }, [])
 
-  // Recent price MOVES need ≥2 readings per cp, so they still come from raw
-  // history — but bounded to a small 7-day window (newest-first, capped) just
-  // for the "recent moves" / market-drivers feeds, NOT the whole catalogue.
+  // Recent history for 24h price-change detection + the alerts feed.
   useEffect(() => {
     const from = new Date(); from.setDate(from.getDate() - 7)
     supabase.from('price_history')
-      .select('id, competitor_product_id, price, currency_code, captured_at, competitor_products(name, competitor_id, product_id, competitors(name))')
+      .select('id, competitor_product_id, price, captured_at, competitor_products(name, competitor_id, product_id, competitors(name))')
       .gte('captured_at', from.toISOString())
       .order('captured_at', { ascending: false })
       .limit(1000)
       .then(({ data }) => setPriceHistory(data || []))
   }, [])
 
+  // Position trend (server-side reconstruction).
   useEffect(() => {
-    supabase.from('scrape_runs')
-      .select('status, started_at, finished_at, items_scraped, items_failed')
-      .order('created_at', { ascending: false })
-      .limit(20)
-      .then(({ data }) => {
-        setScrapeRuns(data || [])
-        setLoading(false)
-      })
-    // Pending proposals — table may not exist / be empty on new installs.
-    // Fail silently and default to 0 so the KPI still renders.
-    supabase.from('pricing_proposals').select('id', { count: 'exact', head: true })
-      .eq('status', 'pending')
-      .then(({ count }) => setPendingProposals(count || 0))
-      .catch(() => setPendingProposals(0))
+    supabase.rpc('get_position_trend', { days: 14 })
+      .then(({ data }) => setTrend(Array.isArray(data) ? data : []))
+      .catch(() => setTrend([]))
   }, [])
 
-  // ── Compute per-product intelligence ────────────────────────
+  useEffect(() => {
+    supabase.from('scrape_runs')
+      .select('status, started_at, finished_at')
+      .order('created_at', { ascending: false }).limit(5)
+      .then(({ data }) => setScrapeRuns(data || []))
+  }, [])
+
+  // ── Per-product intelligence ────────────────────────────
   const productIntel = useMemo(() => {
     const compById = Object.fromEntries(competitors.map(c => [c.id, c]))
     return products.map(p => {
       const productLinks = cps
         .filter(cp => cp.product_id === p.id)
-        .map(cp => {
-          const latest = latestPrices[cp.id]
-          return { cp, competitor: compById[cp.competitor_id], latest }
-        })
+        .map(cp => ({ cp, competitor: compById[cp.competitor_id], latest: latestPrices[cp.id] }))
       const priced = productLinks.filter(l => l.latest?.price != null)
       const rivalPrices = priced.map(l => Number(l.latest.price))
       const minRival = rivalPrices.length ? Math.min(...rivalPrices) : null
       const avgRival = rivalPrices.length ? rivalPrices.reduce((a, b) => a + b, 0) / rivalPrices.length : null
       const yourPrice = p.current_price != null ? Number(p.current_price) : null
-      const minPriceFloor = p.min_price != null ? Number(p.min_price) : null
-      const costPrice = p.cost_price != null ? Number(p.cost_price) : null
-      const targetMarginPct = p.target_margin != null ? Number(p.target_margin) : null
-
-      const gapVsMinPct = (yourPrice != null && minRival != null)
-        ? ((yourPrice - minRival) / minRival) * 100 : null
-      const gapVsAvgPct = (yourPrice != null && avgRival != null)
-        ? ((yourPrice - avgRival) / avgRival) * 100 : null
-
-      // "Where's the cheapest?"
+      const gapVsMinPct = (yourPrice != null && minRival != null) ? ((yourPrice - minRival) / minRival) * 100 : null
+      const gapVsAvgPct = (yourPrice != null && avgRival != null) ? ((yourPrice - avgRival) / avgRival) * 100 : null
       const cheapestLink = priced.reduce((best, cur) =>
         !best || Number(cur.latest.price) < Number(best.latest.price) ? cur : best, null)
-
-      // Market position bucket (only when we have a yourPrice AND ≥1 rival price):
-      //   cheapest → you're below every rival (market leader)
-      //   above    → you're > cheapest rival by more than 1%
-      //   match    → within ±1% of the cheapest rival
-      //   below    → you're below the AVERAGE rival by more than 1% but not cheapest
       let position = null
       if (yourPrice != null && rivalPrices.length > 0) {
-        if (gapVsMinPct <= -0.001) position = 'cheapest'          // <  cheapest (any amount)
-        else if (gapVsMinPct > 1) position = 'above'              // >1% over cheapest
-        else if (Math.abs(gapVsMinPct) <= 1) position = 'match'   // within ±1% of cheapest
-        else if (gapVsAvgPct < -1) position = 'below'             // <-1% vs avg (rare, kept for completeness)
+        if (gapVsMinPct <= -0.001) position = 'cheapest'
+        else if (gapVsMinPct > 1) position = 'above'
+        else if (Math.abs(gapVsMinPct) <= 1) position = 'match'
+        else if (gapVsAvgPct < -1) position = 'below'
         else position = 'match'
       }
-
-      const suggestion = computeSuggestion({ minRival, costPrice, targetMarginPct, minPriceFloor })
-
       return {
-        product: p,
-        rivalCount: priced.length,
-        linkCount: productLinks.length,
-        yourPrice, minRival, avgRival, minPriceFloor,
-        costPrice, targetMarginPct,
-        gapVsMinPct, gapVsAvgPct,
-        cheapestLink,
-        position,
-        suggestion,
+        product: p, rivalCount: priced.length, yourPrice, minRival, avgRival,
+        gapVsMinPct, gapVsAvgPct, cheapestLink, position,
       }
     })
   }, [products, cps, latestPrices, competitors])
 
-  // ── Coverage KPIs ────────────────────────────────────────
-  const trackedCount = productIntel.filter(pi => pi.rivalCount > 0).length
-  const totalProducts = productIntel.length
-  const coveragePct = totalProducts > 0 ? Math.round((trackedCount / totalProducts) * 100) : 0
+  // ── Aggregates ──────────────────────────────────────────
+  const positioned = productIntel.filter(pi => pi.position)
+  const posCount = k => positioned.filter(pi => pi.position === k).length
+  const cheapestN = posCount('cheapest'), matchN = posCount('match'), aboveN = posCount('above'), belowN = posCount('below')
 
-  // Competitors with at least one scraped price. latestPrices is now keyed by
-  // cp_id (RPC rows carry no embed), so resolve competitor_id via the cps list.
+  const trackedCount = productIntel.filter(pi => pi.rivalCount > 0).length
+  const totalProducts = products.length
+  const coveragePct = totalProducts ? Math.round((trackedCount / totalProducts) * 100) : 0
+
+  // Price Match Rate = % of positioned products where you're cheapest OR matching.
+  const matchRate = positioned.length ? Math.round(((cheapestN + matchN) / positioned.length) * 100) : 0
+
+  // Total at risk = Σ (yourPrice − cheapest rival) over above-market products.
+  const totalAtRisk = productIntel.reduce((s, pi) =>
+    pi.position === 'above' && pi.yourPrice != null && pi.minRival != null ? s + (pi.yourPrice - pi.minRival) : s, 0)
+
+  // Avg gap vs cheapest rival, over positioned products (signed %).
+  const avgGap = positioned.length
+    ? positioned.reduce((s, pi) => s + (pi.gapVsMinPct || 0), 0) / positioned.length : null
+
   const competitorsTracked = useMemo(() => {
     const compByCp = Object.fromEntries(cps.map(c => [c.id, c.competitor_id]))
-    const active = new Set()
-    for (const cpId of Object.keys(latestPrices)) {
-      const cid = compByCp[cpId]
-      if (cid != null) active.add(cid)
-    }
-    return active.size || competitors.length
+    const set = new Set()
+    for (const cpId of Object.keys(latestPrices)) { const cid = compByCp[cpId]; if (cid != null) set.add(cid) }
+    return set.size || competitors.length
   }, [latestPrices, cps, competitors])
 
-  // Latest scan across all captured_at, not just scrape_runs (works even
-  // if a run finished but its rows landed via a different path).
-  const latestScanTs = useMemo(() => {
-    let max = 0
-    for (const [, pr] of Object.entries(latestPrices)) {
-      const t = pr?.captured_at ? new Date(pr.captured_at).getTime() : 0
-      if (t > max) max = t
+  // Competitor stock (In / Out only — we store a boolean).
+  const stockStats = useMemo(() => {
+    let inS = 0, out = 0
+    for (const cp of cps) {
+      const s = latestStock[cp.id]
+      if (s === true) inS++; else if (s === false) out++
     }
-    return max || null
-  }, [latestPrices])
+    return { inS, out, total: inS + out }
+  }, [cps, latestStock])
+  const oosPct = stockStats.total ? Math.round((stockStats.out / stockStats.total) * 100) : 0
 
-  // ── Position mix KPIs (only over products with rival data) ──
-  const positioned = productIntel.filter(pi => pi.position)
-  const positionCount = (p) => positioned.filter(pi => pi.position === p).length
-  const cheapestPct = positioned.length ? Math.round((positionCount('cheapest') / positioned.length) * 100) : 0
-  const abovePct    = positioned.length ? Math.round((positionCount('above')    / positioned.length) * 100) : 0
-  const matchPct    = positioned.length ? Math.round((positionCount('match')    / positioned.length) * 100) : 0
-  const belowPct    = positioned.length ? Math.round((positionCount('below')    / positioned.length) * 100) : 0
+  // Donut datasets
+  const positionDonut = [
+    { key: 'cheapest', name: POS.cheapest.label, value: cheapestN, color: POS.cheapest.color },
+    { key: 'match',    name: POS.match.label,    value: matchN,    color: POS.match.color },
+    { key: 'above',    name: POS.above.label,    value: aboveN,    color: POS.above.color },
+    { key: 'below',    name: POS.below.label,    value: belowN,    color: POS.below.color },
+  ].filter(d => d.value > 0)
+  const stockDonut = [
+    { name: 'In Stock',     value: stockStats.inS, color: STOCK.in },
+    { name: 'Out of Stock', value: stockStats.out, color: STOCK.out },
+  ].filter(d => d.value > 0)
 
-  // ── Action KPIs ─────────────────────────────────────────
-  // Actionable = suggested price differs from current by >1% (both directions)
-  const actionable = productIntel.filter(pi =>
-    pi.suggestion && pi.yourPrice != null
-    && Math.abs(pi.suggestion.price - pi.yourPrice) / pi.yourPrice > 0.01
-  )
-
-  // Margin at risk: for products where you're ABOVE cheapest, the sum of
-  // (yourPrice − cheapestRival). This is per-unit margin you'd shed if you
-  // had to match. Rough "money left exposed" — the deeper metric needs volume.
-  const marginAtRisk = productIntel.reduce((sum, pi) => {
-    if (pi.position === 'above' && pi.yourPrice != null && pi.minRival != null) {
-      return sum + (pi.yourPrice - pi.minRival)
+  // Trend → % of positioned products in each bucket per day.
+  const trendData = useMemo(() => trend.map(r => {
+    const total = (r.cheapest + r.matchp + r.above + r.below) || 1
+    return {
+      day: fmtDay(r.day),
+      Cheapest: +(r.cheapest / total * 100).toFixed(1),
+      'Match Price': +(r.matchp / total * 100).toFixed(1),
+      'Above Market': +(r.above / total * 100).toFixed(1),
+      'Below Market': +(r.below / total * 100).toFixed(1),
     }
-    return sum
-  }, 0)
+  }), [trend])
 
-  // Price changes today — distinct (cp_id, day) with a real move in last 24h
-  const dayAgo = Date.now() - 24 * 3600 * 1000
-  const changesToday = useMemo(() => {
-    const groups = {}
-    for (const row of priceHistory) {
-      const arr = groups[row.competitor_product_id] || (groups[row.competitor_product_id] = [])
-      arr.push(row)
-    }
-    let n = 0
-    for (const rows of Object.values(groups)) {
-      if (rows.length < 2) continue
-      const [latest, prior] = rows
-      if (new Date(latest.captured_at).getTime() < dayAgo) continue
-      if (Number(latest.price) !== Number(prior.price)) n++
-    }
-    return n
-  }, [priceHistory])
+  // Top products by price opportunity (above market, ranked by KD you could save)
+  const topOpportunities = useMemo(() => productIntel
+    .filter(pi => pi.position === 'above' && pi.cheapestLink)
+    .map(pi => ({
+      ...pi,
+      opportunity: pi.yourPrice - pi.minRival,
+      cheapestName: pi.cheapestLink?.competitor?.name,
+      cheapestStock: latestStock[pi.cheapestLink?.cp?.id],
+    }))
+    .sort((a, b) => b.opportunity - a.opportunity)
+    .slice(0, 6), [productIntel, latestStock])
 
-  // Data freshness: % of tracked products with a price scraped in the last 24h
-  const freshTracked = productIntel.filter(pi => {
-    if (pi.rivalCount === 0) return false
-    return cps.filter(cp => cp.product_id === pi.product.id)
-      .some(cp => {
-        const t = latestPrices[cp.id]?.captured_at
-        return t && new Date(t).getTime() > dayAgo
-      })
-  }).length
-  const freshPct = trackedCount > 0 ? Math.round((freshTracked / trackedCount) * 100) : 0
-
-  // Worker status
-  const latestScrape = scrapeRuns.find(r => r.started_at)
-  const workerAge = latestScrape?.started_at ? Math.round((Date.now() - new Date(latestScrape.started_at).getTime()) / 60_000) : null
-  const workerHealthy = workerAge != null && workerAge < 30
-
-  // ── Answer-card data ────────────────────────────────────
-  // (1) Where am I losing? → above-market products, ranked by (gap × price)
-  const losingList = productIntel
-    .filter(pi => pi.position === 'above')
-    .map(pi => ({ ...pi, impact: (pi.gapVsMinPct || 0) * (pi.yourPrice || 0) }))
-    .sort((a, b) => b.impact - a.impact)
-    .slice(0, 5)
-
-  // Upside / Intelligence / Action-queue lists moved to the Business Insights
-  // page. losingList stays — the greeting line below uses it.
-
-  // ── Recent moves: distinct-per-cp changes in last 72h ──────
-  const recentMoves = useMemo(() => {
-    // group history by competitor_product_id
-    const groups = {}
-    for (const row of priceHistory) {
-      const arr = groups[row.competitor_product_id] || (groups[row.competitor_product_id] = [])
-      arr.push(row)
-    }
-    // For each cp with ≥2 snapshots, compute latest vs prior
-    const moves = []
-    const cutoff = Date.now() - 72 * 3600 * 1000
-    for (const [cpId, rows] of Object.entries(groups)) {
-      if (rows.length < 2) continue
-      const [latest, prior] = rows
-      if (new Date(latest.captured_at).getTime() < cutoff) continue
-      const p1 = Number(prior.price), p2 = Number(latest.price)
-      if (p1 === p2) continue
-      moves.push({
-        cp_id: cpId,
-        cp_name: latest.competitor_products?.name,
-        competitor_name: latest.competitor_products?.competitors?.name,
-        product_id: latest.competitor_products?.product_id,
-        from: p1, to: p2,
-        changePct: ((p2 - p1) / p1) * 100,
-        at: latest.captured_at,
-      })
-    }
-    return moves.sort((a, b) => new Date(b.at) - new Date(a.at)).slice(0, 8)
-  }, [priceHistory])
-
-  // ── Category performance ─────────────────────────────────
-  const categoryRollup = useMemo(() => {
-    const buckets = new Map()
+  // Cheapest competitor by category
+  const cheapestByCategory = useMemo(() => {
+    const catById = Object.fromEntries(categories.map(c => [c.id, c]))
+    const byCat = {}
     for (const pi of productIntel) {
-      const key = pi.product.category_id ?? 0
-      if (!buckets.has(key)) {
-        buckets.set(key, {
-          categoryId: pi.product.category_id,
-          name: categories.find(c => c.id === pi.product.category_id)?.name || 'Uncategorized',
-          products: [],
-        })
-      }
-      buckets.get(key).products.push(pi)
+      if (!pi.cheapestLink?.competitor || pi.yourPrice == null || pi.minRival == null) continue
+      const catId = pi.product.category_id ?? 'uncat'
+      const b = byCat[catId] || (byCat[catId] = { catId, wins: {}, n: 0, diffSum: 0 })
+      const cName = pi.cheapestLink.competitor.name
+      b.wins[cName] = (b.wins[cName] || 0) + 1
+      b.n++
+      b.diffSum += ((pi.minRival - pi.yourPrice) / pi.yourPrice) * 100  // negative = rival cheaper
     }
-    return [...buckets.values()].map(b => {
-      const tracked = b.products.filter(p => p.rivalCount > 0)
-      const gaps = tracked.map(p => p.gapVsMinPct).filter(g => g != null)
-      const avgGap = gaps.length ? gaps.reduce((a, x) => a + x, 0) / gaps.length : null
-      const overpriced = b.products.filter(p => p.gapVsMinPct != null && p.gapVsMinPct > 5).length
-      const underpriced = b.products.filter(p => p.gapVsAvgPct != null && p.gapVsAvgPct < -5).length
+    return Object.values(byCat).map(b => {
+      const [topName, topWins] = Object.entries(b.wins).sort((a, c) => c[1] - a[1])[0] || ['—', 0]
       return {
-        ...b,
-        productCount: b.products.length,
-        trackedCount: tracked.length,
-        avgGap,
-        overpriced, underpriced,
+        category: catById[b.catId]?.name || 'Uncategorised',
+        competitor: topName,
+        pctCheapest: Math.round((topWins / b.n) * 100),
+        avgDiff: b.diffSum / b.n,
+        n: b.n,
       }
-    }).sort((a, b) => (b.overpriced || 0) - (a.overpriced || 0))
+    }).sort((a, b) => b.n - a.n).slice(0, 6)
   }, [productIntel, categories])
 
-  if (loading) return <div className="min-h-[60vh]"><LoadingBlock text="Assembling intelligence" /></div>
+  // Price distribution — histogram of gap vs cheapest rival (%)
+  const distribution = useMemo(() => {
+    const edges = [-50, -25, -10, -5, 0, 5, 10, 25, 50]
+    const labels = ['<-50', '-50..-25', '-25..-10', '-10..-5', '-5..0', '0..5', '5..10', '10..25', '25..50', '>50']
+    const counts = new Array(labels.length).fill(0)
+    for (const pi of positioned) {
+      const g = pi.gapVsMinPct
+      if (g == null) continue
+      let idx = edges.findIndex(e => g < e)
+      if (idx === -1) idx = labels.length - 1
+      counts[idx]++
+    }
+    return labels.map((label, i) => ({ label, count: counts[i] }))
+  }, [positioned])
 
-  const greeting = profile?.full_name?.split(' ')[0] || 'there'
-  const today = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })
+  // Price changes in the last 24h (competitor readings)
+  const changes24h = useMemo(() => {
+    const dayAgo = Date.now() - 24 * 3600 * 1000
+    const groups = {}
+    for (const row of priceHistory) {
+      const arr = groups[row.competitor_product_id] || (groups[row.competitor_product_id] = [])
+      arr.push(row)
+    }
+    let up = 0, down = 0, flat = 0
+    for (const rows of Object.values(groups)) {
+      const [latest, prior] = rows
+      if (!latest || new Date(latest.captured_at).getTime() < dayAgo) continue
+      if (!prior) { flat++; continue }
+      const a = Number(prior.price), b = Number(latest.price)
+      if (b > a) up++; else if (b < a) down++; else flat++
+    }
+    return { up, down, flat }
+  }, [priceHistory])
+
+  // Recent moves for the alerts feed
+  const recentMoves = useMemo(() => {
+    const groups = {}
+    for (const row of priceHistory) {
+      const arr = groups[row.competitor_product_id] || (groups[row.competitor_product_id] = [])
+      arr.push(row)
+    }
+    const moves = []
+    const cutoff = Date.now() - 72 * 3600 * 1000
+    for (const rows of Object.values(groups)) {
+      const [latest, prior] = rows
+      if (!latest || !prior || new Date(latest.captured_at).getTime() < cutoff) continue
+      const a = Number(prior.price), b = Number(latest.price)
+      if (a === b) continue
+      moves.push({
+        name: latest.competitor_products?.name,
+        competitor: latest.competitor_products?.competitors?.name,
+        from: a, to: b, changePct: ((b - a) / a) * 100, at: latest.captured_at,
+      })
+    }
+    return moves.sort((a, b) => new Date(b.at) - new Date(a.at)).slice(0, 6)
+  }, [priceHistory])
+
+  const lastScan = scrapeRuns.find(r => r.started_at)?.started_at
+  const greeting = timeGreeting()
+  const name = profile?.full_name?.split(' ')[0] || profile?.email?.split('@')[0] || ''
+
+  if (pLoading) return <div className="pt-4"><LoadingBlock text="Building report" /></div>
 
   return (
     <div>
-      {/* ── Hero header ─────────────────────────────────── */}
-      <div className="mb-8 pb-6 border-b border-ink-100">
-        <div className="flex items-baseline justify-between flex-wrap gap-3">
-          <div>
-            <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-brand-600 mb-2">
-              {today}
-            </div>
-            <h1 className="font-display text-[36px] leading-[1.05] tracking-tightest text-ink-900">
-              Good morning, {greeting}.
-            </h1>
-            <p className="text-[15px] text-ink-500 mt-2 max-w-2xl leading-relaxed">
-              {losingList.length > 0
-                ? <>You're above the market on <span className="font-semibold text-red-700">{positionCount('above')} product{positionCount('above') === 1 ? '' : 's'}</span> · leading the market on <span className="font-semibold text-emerald-700">{positionCount('cheapest')}</span> · <span className="font-semibold text-ink-800">KD {marginAtRisk.toFixed(3)}</span> in per-unit margin exposed.</>
-                : positionCount('cheapest') > 0
-                  ? <>Leading the market on <span className="font-semibold text-emerald-700">{positionCount('cheapest')} product{positionCount('cheapest') === 1 ? '' : 's'}</span> · no urgent overprice fires.</>
-                  : <>Baseline stable. No overprice fires and no leadership positions to defend.</>}
-            </p>
-          </div>
-          <div className="text-right">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-400">Last scan</div>
-            <div className="font-display text-[18px] text-ink-800 tabular-nums mt-1">
-              {latestScanTs ? relTime(new Date(latestScanTs)) : '—'}
-            </div>
-            {workerHealthy && (
-              <div className="inline-flex items-center gap-1 text-[10.5px] text-emerald-700 mt-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" /> live
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* ── KPI ribbon: 3 grouped rows ──────────────────── */}
-      {/* Row 1 — Coverage */}
-      <SectionLabel>Coverage</SectionLabel>
-      <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
-        <KpiTile
-          icon={Layers} label="Products Monitored"
-          value={`${trackedCount}`}
-          hint={`${coveragePct}% of ${totalProducts}-item catalogue`}
-          tone={coveragePct >= 80 ? 'emerald' : coveragePct >= 50 ? 'gold' : 'amber'}
-        />
-        <KpiTile
-          icon={Building2} label="Competitors Tracked"
-          value={competitorsTracked}
-          hint={competitorsTracked === 0 ? 'Add a competitor to begin' : `${competitorsTracked} site${competitorsTracked === 1 ? '' : 's'} feeding data`}
-          tone="ink"
-        />
-        <KpiTile
-          icon={Clock} label="Latest Scan"
-          value={latestScanTs ? relTime(new Date(latestScanTs)) : '—'}
-          hint={freshPct >= 90 ? `${freshPct}% of tracked fresh (24h)` : `${freshTracked}/${trackedCount} fresh in 24h`}
-          tone={freshPct >= 90 ? 'emerald' : freshPct >= 60 ? 'gold' : 'amber'}
-          pulse={workerHealthy}
-        />
-      </div>
-
-      {/* Row 2 — Market Position */}
-      <SectionLabel>Market Position</SectionLabel>
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
-        <KpiTile
-          icon={Crown} label="Cheapest Price"
-          value={`${cheapestPct}%`}
-          hint={`${positionCount('cheapest')} product${positionCount('cheapest') === 1 ? '' : 's'} lead the market`}
-          tone="emerald"
-        />
-        <KpiTile
-          icon={Scale} label="Price Matches"
-          value={`${matchPct}%`}
-          hint={`${positionCount('match')} within ±1% of cheapest rival`}
-          tone="ink"
-        />
-        <KpiTile
-          icon={TrendingUp} label="Above Market"
-          value={`${abovePct}%`}
-          hint={`${positionCount('above')} priced above cheapest`}
-          tone={abovePct === 0 ? 'emerald' : abovePct < 20 ? 'gold' : 'red'}
-        />
-        <KpiTile
-          icon={TrendingDown} label="Below Market"
-          value={`${belowPct}%`}
-          hint={`${positionCount('below')} priced below avg rival`}
-          tone="gold"
-        />
-      </div>
-
-      {/* Row 3 — Action */}
-      <SectionLabel>Today</SectionLabel>
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        <KpiTile
-          icon={Zap} label="Price Changes Today"
-          value={changesToday}
-          hint={changesToday === 0 ? 'Market quiet' : `${changesToday} rival move${changesToday === 1 ? '' : 's'} in last 24h`}
-          tone={changesToday > 5 ? 'red' : changesToday > 0 ? 'gold' : 'ink'}
-        />
-        <KpiTile
-          icon={ClipboardList} label="Repricing Actions"
-          value={actionable.length}
-          hint={actionable.length === 0 ? 'Nothing to change' : 'Suggested price differs by >1%'}
-          tone={actionable.length > 0 ? 'gold' : 'emerald'}
-        />
-        <KpiTile
-          icon={ShieldCheck} label="Approval Pending"
-          value={pendingProposals}
-          hint={pendingProposals === 0 ? 'Approval queue clear' : 'Awaiting manager review'}
-          tone={pendingProposals > 0 ? 'gold' : 'ink'}
-        />
-        <KpiTile
-          icon={Flame} label="Margin at Risk"
-          value={`KD ${marginAtRisk.toFixed(3)}`}
-          hint={marginAtRisk === 0 ? 'No exposure' : `Across ${positionCount('above')} above-market SKU${positionCount('above') === 1 ? '' : 's'}`}
-          tone={marginAtRisk > 5 ? 'red' : marginAtRisk > 0 ? 'gold' : 'emerald'}
-        />
-      </div>
-
-      {/* The four "answer cards" (Priority · Upside · Intelligence · Action
-          queue) now live on their own /business-insights page. */}
-
-      {/* ── Bottom: Category performance + Recent moves ─── */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {categoryRollup.length > 0 && (
-          <div className="lg:col-span-2">
-            <Card className="overflow-hidden">
-              <div className="px-6 py-4 border-b border-ink-100">
-                <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-500">Portfolio</div>
-                <h3 className="font-display text-[20px] tracking-tight text-ink-900 mt-1">Category performance</h3>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead className="bg-canvas-100 border-b border-ink-200">
-                    <tr>
-                      <Th>Category</Th>
-                      <Th className="text-right">Products</Th>
-                      <Th className="text-right">Tracked</Th>
-                      <Th className="text-right">Avg gap vs cheapest rival</Th>
-                      <Th className="text-right">Overpriced</Th>
-                      <Th className="text-right">Underpriced</Th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-ink-100">
-                    {categoryRollup.map(row => (
-                      <tr key={row.categoryId ?? 'uncat'} className="hover:bg-canvas-100/50">
-                        <Td className="font-display text-[15px] tracking-tight text-ink-900">{row.name}</Td>
-                        <Td className="text-right tabular-nums font-medium">{row.productCount}</Td>
-                        <Td className="text-right tabular-nums text-ink-600">{row.trackedCount}/{row.productCount}</Td>
-                        <Td className="text-right">
-                          {row.avgGap != null ? <GapPill pct={row.avgGap} large /> : <span className="text-ink-300 text-xs italic">not tracked</span>}
-                        </Td>
-                        <Td className="text-right tabular-nums font-medium">
-                          {row.overpriced > 0 ? <span className="text-red-700">{row.overpriced}</span> : <span className="text-ink-300">0</span>}
-                        </Td>
-                        <Td className="text-right tabular-nums font-medium">
-                          {row.underpriced > 0 ? <span className="text-emerald-700">{row.underpriced}</span> : <span className="text-ink-300">0</span>}
-                        </Td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </Card>
+      <PageHeader
+        kicker="Competitive Pricing"
+        title={`${greeting}${name ? ', ' + name : ''}.`}
+        subtitle="Live market position, price opportunity, and competitor stock — refreshed on every scrape."
+        action={lastScan && (
+          <div className="text-[11px] text-ink-500 inline-flex items-center gap-1.5" title="Most recent scrape">
+            <Radio size={12} className="text-emerald-500" /> Last scan {relTime(new Date(lastScan))}
           </div>
         )}
-        <div>
-          <Card className="overflow-hidden">
-            <div className="px-5 py-4 border-b border-ink-100">
-              <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-brand-700">Competitor moves</div>
-              <h3 className="font-display text-[17px] tracking-tight text-ink-900 mt-1">Last 72 hours</h3>
+      />
+
+      {/* ── KPI row ─────────────────────────────────────── */}
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 mb-5">
+        <Kpi icon={Package} tone="ink" label="Products Monitored" value={trackedCount}
+          hint={`${coveragePct}% of ${totalProducts} products`} />
+        <Kpi icon={Building2} tone="blue" label="Competitors Tracked" value={competitorsTracked}
+          hint={`${competitors.length} active marketplaces`} />
+        <Kpi icon={ShieldCheck} tone="emerald" label="Price Match Rate" value={`${matchRate}%`}
+          hint="At or below cheapest rival" />
+        <Kpi icon={Flame} tone="red" label="Total at Risk" value={`KD ${totalAtRisk.toFixed(3)}`}
+          hint={`${aboveN} product${aboveN === 1 ? '' : 's'} above market`} />
+        <Kpi icon={Scale} tone={avgGap != null && avgGap > 0 ? 'red' : 'emerald'} label="Avg Gap vs Cheapest"
+          value={avgGap == null ? '—' : `${avgGap > 0 ? '+' : ''}${avgGap.toFixed(1)}%`}
+          hint="Mean position vs lowest rival" />
+        <Kpi icon={PackageX} tone="amber" label="Competitor Out-of-Stock" value={stockStats.out}
+          hint={`${oosPct}% of ${stockStats.total} tracked links`} />
+      </div>
+
+      {/* ── Row 2: donut · trend · donut ───────────────── */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
+        <Panel title="Market Position Overview" subtitle="Where your prices sit vs the cheapest rival">
+          <DonutWithCenter data={positionDonut} centerValue={positioned.length} centerLabel="Products" />
+        </Panel>
+
+        <Panel title="Price Position Trend" subtitle="Share of products in each position over time (14d)"
+          className="lg:col-span-1">
+          {trendData.length === 0 ? (
+            <EmptyChart text="Trend builds as scrape history accrues." />
+          ) : (
+            <ResponsiveContainer width="100%" height={230}>
+              <LineChart data={trendData} margin={{ top: 8, right: 8, left: -12, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#eee" vertical={false} />
+                <XAxis dataKey="day" tick={{ fontSize: 10, fill: '#9ca3af' }} tickLine={false} axisLine={false} />
+                <YAxis tick={{ fontSize: 10, fill: '#9ca3af' }} tickLine={false} axisLine={false} unit="%" width={38} />
+                <Tooltip contentStyle={tooltipStyle} formatter={(v) => `${v}%`} />
+                <Legend wrapperStyle={{ fontSize: 10 }} iconType="plainline" />
+                <Line type="monotone" dataKey="Cheapest"     stroke={POS.cheapest.color} strokeWidth={2} dot={false} />
+                <Line type="monotone" dataKey="Match Price"  stroke={POS.match.color}    strokeWidth={2} dot={false} />
+                <Line type="monotone" dataKey="Above Market" stroke={POS.above.color}    strokeWidth={2} dot={false} />
+                <Line type="monotone" dataKey="Below Market" stroke={POS.below.color}    strokeWidth={2} dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          )}
+        </Panel>
+
+        <Panel title="Competitor Stock Status" subtitle="Availability across tracked competitor listings">
+          <DonutWithCenter data={stockDonut} centerValue={stockStats.total} centerLabel="Listings" />
+        </Panel>
+      </div>
+
+      {/* ── Row 3: opportunities · category · alerts ───── */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 mb-4">
+        <Panel title="Top Products by Price Opportunity" subtitle="You're above the cheapest rival — biggest savings first"
+          className="lg:col-span-5" bodyClass="p-0">
+          {topOpportunities.length === 0 ? <EmptyChart text="You're competitive on every tracked product." /> : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead><tr className="text-[10px] uppercase tracking-wide text-ink-400 border-b border-ink-100">
+                  <Th>#</Th><Th>Product</Th><Th className="text-right">Your</Th><Th className="text-right">Cheapest</Th>
+                  <Th className="text-right">Diff</Th><Th className="text-right">Opportunity</Th><Th>Stock</Th>
+                </tr></thead>
+                <tbody className="divide-y divide-ink-50">
+                  {topOpportunities.map((r, i) => (
+                    <tr key={r.product.id} className="hover:bg-canvas-100/50">
+                      <Td className="text-ink-400 tabular-nums">{i + 1}</Td>
+                      <Td><div className="font-medium text-ink-900 truncate max-w-[160px]">{r.product.name}</div>
+                        <div className="text-[10px] font-mono text-ink-400">{r.product.sku}</div></Td>
+                      <Td className="text-right tabular-nums">KD {r.yourPrice.toFixed(3)}</Td>
+                      <Td className="text-right tabular-nums">KD {r.minRival.toFixed(3)}
+                        <div className="text-[10px] text-ink-400 truncate max-w-[90px] ml-auto">{r.cheapestName}</div></Td>
+                      <Td className="text-right"><span className="text-red-700 font-semibold tabular-nums">+{r.gapVsMinPct.toFixed(1)}%</span></Td>
+                      <Td className="text-right tabular-nums font-semibold text-brand-700">KD {r.opportunity.toFixed(3)}</Td>
+                      <Td><StockChip s={r.cheapestStock} /></Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-            {recentMoves.length === 0 ? (
-              <div className="py-10 px-6 text-center text-[12.5px] text-ink-500">
-                Prices are steady — no changes detected in the last 3 days.
-              </div>
-            ) : (
-              <div className="divide-y divide-ink-100">
-                {recentMoves.map(m => <MoveRow key={m.at + m.cp_id} move={m} />)}
-              </div>
-            )}
-          </Card>
-        </div>
+          )}
+        </Panel>
+
+        <Panel title="Cheapest Competitor by Category" subtitle="Who leads price in each category"
+          className="lg:col-span-4" bodyClass="p-0">
+          {cheapestByCategory.length === 0 ? <EmptyChart text="No category price data yet." /> : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead><tr className="text-[10px] uppercase tracking-wide text-ink-400 border-b border-ink-100">
+                  <Th>Category</Th><Th>Cheapest</Th><Th className="text-right">% Cheapest</Th><Th className="text-right">Avg Diff</Th>
+                </tr></thead>
+                <tbody className="divide-y divide-ink-50">
+                  {cheapestByCategory.map(r => (
+                    <tr key={r.category} className="hover:bg-canvas-100/50">
+                      <Td className="font-medium text-ink-900 truncate max-w-[120px]">{r.category}</Td>
+                      <Td className="truncate max-w-[110px]">{r.competitor}</Td>
+                      <Td className="text-right tabular-nums">{r.pctCheapest}%</Td>
+                      <Td className="text-right tabular-nums font-semibold">
+                        <span className={r.avgDiff < 0 ? 'text-red-700' : 'text-emerald-700'}>
+                          {r.avgDiff > 0 ? '+' : ''}{r.avgDiff.toFixed(1)}%
+                        </span>
+                      </Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Panel>
+
+        <Panel title="Recent Price Moves" subtitle="Competitor changes, last 72h" className="lg:col-span-3" bodyClass="p-0">
+          {recentMoves.length === 0 ? <EmptyChart text="No competitor moves recently." /> : (
+            <div className="divide-y divide-ink-50">
+              {recentMoves.map((m, i) => (
+                <div key={i} className="px-4 py-2.5">
+                  <div className="text-[12px] font-medium text-ink-900 truncate">{m.name}</div>
+                  <div className="text-[10px] text-ink-400">{m.competitor} · {relTime(new Date(m.at))}</div>
+                  <div className="flex items-center justify-between mt-1">
+                    <span className="text-[11px] tabular-nums text-ink-500">{m.from.toFixed(3)} → <b className="text-ink-800">{m.to.toFixed(3)}</b></span>
+                    <span className={`text-[11px] font-semibold tabular-nums inline-flex items-center gap-0.5 ${m.changePct > 0 ? 'text-red-700' : 'text-emerald-700'}`}>
+                      {m.changePct > 0 ? <ArrowUpRight size={11} /> : <ArrowDownRight size={11} />}
+                      {m.changePct > 0 ? '+' : ''}{m.changePct.toFixed(1)}%
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Panel>
       </div>
 
-      {/* ── Quick actions strip ─────────────────────────── */}
-      <div className="mt-6 flex flex-wrap gap-2">
-        <QuickChip to="/products" icon={Package} label="Add product" />
-        <QuickChip to="/competitor-products" icon={Sparkles} label="Manage links" />
-        <QuickChip to="/comparison" icon={LineChart} label="Full comparison" />
-        <QuickChip to="/scrapers" icon={Play} label="Trigger scrape" />
+      {/* ── Row 4: distribution · price changes ─────────── */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <Panel title="Price Distribution" subtitle="Your gap vs the cheapest rival (%)" className="lg:col-span-2">
+          <ResponsiveContainer width="100%" height={210}>
+            <BarChart data={distribution} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#eee" vertical={false} />
+              <XAxis dataKey="label" tick={{ fontSize: 9, fill: '#9ca3af' }} tickLine={false} axisLine={false} interval={0} angle={-20} textAnchor="end" height={42} />
+              <YAxis tick={{ fontSize: 10, fill: '#9ca3af' }} tickLine={false} axisLine={false} width={30} allowDecimals={false} />
+              <Tooltip contentStyle={tooltipStyle} formatter={(v) => [`${v} products`, '']} labelFormatter={l => `Gap ${l}%`} />
+              <Bar dataKey="count" radius={[3, 3, 0, 0]}>
+                {distribution.map((d, i) => {
+                  const lbl = d.label
+                  const color = lbl.startsWith('<') || lbl.startsWith('-') ? POS.cheapest.color
+                    : lbl === '0..5' ? POS.match.color : POS.above.color
+                  return <Cell key={i} fill={color} />
+                })}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+          <div className="text-[10px] text-ink-400 text-center mt-1">← cheaper than rivals · pricier than rivals →</div>
+        </Panel>
+
+        <Panel title="Price Changes (24h)" subtitle="Competitor movements in the last day">
+          <div className="grid grid-cols-3 gap-2 pt-2">
+            <ChangeTile icon={TrendingUp} tone="red" label="Increases" value={changes24h.up} />
+            <ChangeTile icon={ArrowRight} tone="ink" label="No change" value={changes24h.flat} />
+            <ChangeTile icon={TrendingDown} tone="emerald" label="Decreases" value={changes24h.down} />
+          </div>
+          <NavLink to="/prices" className="mt-4 text-[11.5px] text-brand-700 hover:underline inline-flex items-center gap-1">
+            View price trends <ArrowRight size={12} />
+          </NavLink>
+        </Panel>
       </div>
     </div>
   )
 }
 
-/* ── Widgets ───────────────────────────────────────────── */
+// ── Presentational helpers ──────────────────────────────────
+const TONES = {
+  ink:     'bg-ink-100 text-ink-700',
+  blue:    'bg-blue-50 text-blue-700',
+  emerald: 'bg-emerald-50 text-emerald-700',
+  red:     'bg-red-50 text-red-700',
+  amber:   'bg-amber-50 text-amber-700',
+}
+const tooltipStyle = { fontSize: 11, borderRadius: 8, border: '1px solid #e5e7eb', boxShadow: '0 4px 12px rgba(0,0,0,.08)' }
 
-function KpiTile({ icon: Icon, label, value, hint, tone = 'ink', pulse }) {
-  const tones = {
-    emerald: { icon: 'bg-emerald-50 text-emerald-700 border-emerald-100', accent: 'text-emerald-700' },
-    red:     { icon: 'bg-red-50 text-red-700 border-red-100',             accent: 'text-red-700' },
-    amber:   { icon: 'bg-amber-50 text-amber-800 border-amber-100',       accent: 'text-amber-800' },
-    gold:    { icon: 'bg-brand-50 text-brand-700 border-brand-100',       accent: 'text-brand-700' },
-    ink:     { icon: 'bg-ink-100 text-ink-700 border-ink-200',            accent: 'text-ink-800' },
-  }
-  const t = tones[tone] || tones.ink
-  // Shrink font when the value is longer than a short number/percent, so KPI
-  // tiles that hold "KD 12.345" or "just now" don't overflow.
-  const strVal = String(value ?? '')
-  const valSize = strVal.length > 8 ? 'text-[20px]' : strVal.length > 5 ? 'text-[24px]' : 'text-[30px]'
+function Kpi({ icon: Icon, label, value, hint, tone = 'ink' }) {
   return (
-    <div className="bg-white border border-ink-100 rounded-2xl p-5 shadow-card relative overflow-hidden">
-      <div className="flex items-start gap-3">
-        <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 border relative ${t.icon}`}>
-          <Icon size={16} strokeWidth={2} />
-          {pulse && <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-emerald-500 animate-ping" />}
+    <Card className="p-4">
+      <div className="flex items-center justify-between">
+        <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-ink-500 leading-tight">{label}</div>
+        <span className={`inline-flex items-center justify-center w-7 h-7 rounded-lg ${TONES[tone]}`}><Icon size={14} /></span>
+      </div>
+      <div className="font-display text-[26px] leading-none text-ink-900 mt-3 tabular-nums">{value}</div>
+      <div className="text-[10.5px] text-ink-500 mt-1.5">{hint}</div>
+    </Card>
+  )
+}
+
+function Panel({ title, subtitle, children, className = '', bodyClass = '' }) {
+  return (
+    <Card className={`overflow-hidden flex flex-col ${className}`}>
+      <div className="px-5 py-3.5 border-b border-ink-100">
+        <div className="font-display text-[15px] tracking-tight text-ink-900">{title}</div>
+        {subtitle && <div className="text-[11px] text-ink-500 mt-0.5">{subtitle}</div>}
+      </div>
+      <div className={`flex-1 ${bodyClass || 'p-4'}`}>{children}</div>
+    </Card>
+  )
+}
+
+function DonutWithCenter({ data, centerValue, centerLabel }) {
+  if (!data.length) return <EmptyChart text="No data yet." />
+  const total = data.reduce((s, d) => s + d.value, 0) || 1
+  return (
+    <div className="flex items-center gap-2">
+      <div className="relative" style={{ width: 150, height: 180 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <PieChart>
+            <Pie data={data} dataKey="value" nameKey="name" cx="50%" cy="50%"
+              innerRadius={48} outerRadius={70} paddingAngle={2} stroke="none">
+              {data.map((d, i) => <Cell key={i} fill={d.color} />)}
+            </Pie>
+            <Tooltip contentStyle={tooltipStyle} formatter={(v, n) => [`${v} (${Math.round(v / total * 100)}%)`, n]} />
+          </PieChart>
+        </ResponsiveContainer>
+        <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+          <div className="font-display text-[22px] leading-none text-ink-900 tabular-nums">{centerValue}</div>
+          <div className="text-[9px] uppercase tracking-wide text-ink-400 mt-0.5">{centerLabel}</div>
         </div>
-        <div className="min-w-0 flex-1">
-          <div className="text-[10px] uppercase tracking-[0.14em] font-semibold text-ink-500">{label}</div>
-          <div className={`font-display ${valSize} leading-none mt-1.5 tabular-nums ${t.accent}`}>{value}</div>
-          <div className="text-[11px] text-ink-500 mt-1.5 leading-snug">{hint}</div>
-        </div>
+      </div>
+      <div className="flex-1 space-y-1.5">
+        {data.map((d, i) => (
+          <div key={i} className="flex items-center gap-2 text-[11.5px]">
+            <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ background: d.color }} />
+            <span className="text-ink-600 flex-1 truncate">{d.name}</span>
+            <span className="tabular-nums font-semibold text-ink-800">{d.value}</span>
+            <span className="tabular-nums text-ink-400 w-9 text-right">{Math.round(d.value / total * 100)}%</span>
+          </div>
+        ))}
       </div>
     </div>
   )
 }
 
-function SectionLabel({ children }) {
+function ChangeTile({ icon: Icon, label, value, tone }) {
   return (
-    <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-ink-500 mb-2 mt-1">
-      {children}
+    <div className="text-center rounded-lg border border-ink-100 py-3">
+      <span className={`inline-flex items-center justify-center w-7 h-7 rounded-lg mb-1.5 ${TONES[tone]}`}><Icon size={14} /></span>
+      <div className="font-display text-[22px] leading-none text-ink-900 tabular-nums">{value}</div>
+      <div className="text-[10px] text-ink-500 mt-1">{label}</div>
     </div>
   )
 }
 
-function MoveRow({ move }) {
-  const rising = move.changePct > 0
-  return (
-    <div className="px-5 py-3 hover:bg-canvas-100/40 transition-colors">
-      <div className="text-[12.5px] font-semibold text-ink-900 truncate">{move.cp_name}</div>
-      <div className="text-[11px] text-ink-500 mt-0.5">{move.competitor_name}</div>
-      <div className="flex items-center justify-between mt-1.5">
-        <div className="text-[11.5px] tabular-nums text-ink-600">
-          {move.from.toFixed(3)}
-          <ArrowRight size={10} className="inline mx-1 text-ink-400" />
-          <span className="text-ink-900 font-semibold">{move.to.toFixed(3)}</span>
-        </div>
-        <span className={`inline-flex items-center gap-0.5 text-[11px] font-semibold tabular-nums ${rising ? 'text-red-700' : 'text-emerald-700'}`}>
-          {rising ? <ArrowUpRight size={11} /> : <ArrowDownRight size={11} />}
-          {rising ? '+' : ''}{move.changePct.toFixed(1)}%
-        </span>
-      </div>
-      <div className="text-[10px] text-ink-400 mt-1">{relTime(new Date(move.at))}</div>
-    </div>
-  )
+function StockChip({ s }) {
+  if (s === true) return <span className="text-[10px] font-semibold text-emerald-700">In stock</span>
+  if (s === false) return <span className="text-[10px] font-semibold text-amber-600">Out of stock</span>
+  return <span className="text-[10px] text-ink-400">—</span>
 }
 
-function GapPill({ pct, large }) {
-  if (pct == null) return <span className="text-ink-300">—</span>
-  const flat = Math.abs(pct) < 1
-  const isOver = pct > 0
-  const size = large ? 'px-2.5 py-1 text-[12px]' : 'px-2 py-0.5 text-[11px]'
-  if (flat) return (
-    <span className={`inline-flex items-center gap-1 rounded-full font-semibold border ${size} bg-ink-100 text-ink-700 border-ink-200 tabular-nums`}>
-      Flat
-    </span>
-  )
-  return (
-    <span className={`inline-flex items-center gap-1 rounded-full font-semibold border tabular-nums ${size} ${
-      isOver ? 'bg-red-50 text-red-800 border-red-100' : 'bg-emerald-50 text-emerald-800 border-emerald-100'
-    }`}>
-      {isOver ? <ArrowUpRight size={11}/> : <ArrowDownRight size={11}/>}
-      {isOver ? '+' : ''}{pct.toFixed(1)}%
-    </span>
-  )
-}
-
-function QuickChip({ to, icon: Icon, label }) {
-  return (
-    <NavLink to={to}
-      className="inline-flex items-center gap-2 px-3.5 py-2 bg-white border border-ink-200 rounded-full text-[12.5px] font-medium text-ink-700 hover:border-brand-300 hover:text-brand-700 hover:bg-brand-50/60 transition-colors">
-      <Icon size={13} />
-      {label}
-    </NavLink>
-  )
+function EmptyChart({ text }) {
+  return <div className="h-[180px] flex items-center justify-center text-center text-[12px] text-ink-400 px-4">{text}</div>
 }
 
 function Th({ children, className = '' }) {
-  return <th className={`px-6 py-3 text-left text-[10px] font-semibold text-ink-500 uppercase tracking-[0.14em] ${className}`}>{children}</th>
+  return <th className={`px-3 py-2.5 text-left font-semibold ${className}`}>{children}</th>
 }
 function Td({ children, className = '' }) {
-  return <td className={`px-6 py-3.5 text-sm text-ink-800 ${className}`}>{children}</td>
+  return <td className={`px-3 py-2.5 align-top ${className}`}>{children}</td>
 }
 
-function relTime(d) {
-  const s = Math.floor((Date.now() - d.getTime()) / 1000)
-  if (s < 60)    return 'just now'
-  if (s < 3600)  return `${Math.floor(s / 60)}m ago`
+function fmtDay(d) {
+  const dt = new Date(d)
+  return dt.toLocaleDateString('en', { month: 'short', day: 'numeric' })
+}
+function timeGreeting() {
+  const h = new Date().getHours()
+  return h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening'
+}
+function relTime(dt) {
+  const s = Math.floor((Date.now() - dt.getTime()) / 1000)
+  if (s < 60) return 'just now'
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`
   return `${Math.floor(s / 86400)}d ago`
 }
