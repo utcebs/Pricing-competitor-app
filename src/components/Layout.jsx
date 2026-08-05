@@ -65,9 +65,12 @@ export default function Layout() {
   const currentLng = i18n.language || 'en'
 
   return (
-    <div className="min-h-screen flex bg-canvas-50 text-ink-900">
+    <div className="h-screen flex bg-canvas-50 text-ink-900 overflow-hidden">
       {/* ── Sidebar ─────────────────────────────────────── */}
-      <aside className="w-[260px] min-h-screen bg-ink-900 text-ink-300 flex flex-col relative">
+      {/* h-screen (not min-h-screen) so the sidebar is exactly the viewport
+          height: the nav scrolls internally and the footer (locale + sign out)
+          stays pinned to the bottom, always visible without page scrolling. */}
+      <aside className="w-[260px] h-screen bg-ink-900 text-ink-300 flex flex-col relative">
         {/* Faint gold accent line */}
         <div className="absolute top-0 right-0 w-px h-full bg-gradient-to-b from-brand-500/40 via-transparent to-transparent" />
 
