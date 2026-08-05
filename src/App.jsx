@@ -43,6 +43,7 @@ const CompetitorProducts = lazyWithRetry(PAGE_IMPORTS['/competitor-products'])
 const PriceEntry         = lazyWithRetry(PAGE_IMPORTS['/prices/new'])
 const PriceTrends        = lazyWithRetry(PAGE_IMPORTS['/prices'])
 const Comparison         = lazyWithRetry(PAGE_IMPORTS['/comparison'])
+const BusinessInsights   = lazyWithRetry(PAGE_IMPORTS['/business-insights'])
 const Categories         = lazyWithRetry(PAGE_IMPORTS['/categories'])
 const Users              = lazyWithRetry(PAGE_IMPORTS['/users'])
 const Scrapers           = lazyWithRetry(PAGE_IMPORTS['/scrapers'])
@@ -67,6 +68,7 @@ export default function App() {
             <Route path="/prices"              element={<PriceTrends />} />
             <Route path="/prices/new"          element={<PriceEntry />} />
             <Route path="/comparison"          element={<Comparison />} />
+            <Route path="/business-insights"   element={<BusinessInsights />} />
             <Route path="/reprice"             element={<RepriceChecklist />} />
             <Route path="/scrapers"            element={<Scrapers />} />
             <Route path="/matches"             element={<MatchReview />} />
