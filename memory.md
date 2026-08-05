@@ -796,3 +796,33 @@ _Last updated: 2026-07-30 — Render continuous worker (Docker/Playwright image)
 d646cdd (Xcite discontinued), latest-values-rpc + fetchLatest* (perf), bigint fix, security-hardening, RPC pagination fix (the 1000-row regression), fetchAll + Scrapers, lazyWithRetry, Comparison batch+serial, Layout h-screen, BusinessInsights page. All on `main`, pushed. Two migrations to run in SQL editor: `latest-values-rpc.sql` (re-run after the ORDER BY + bigint edits) and `security-hardening.sql` — both applied by user.
 
 _Last updated: 2026-08-03 — perf DISTINCT ON RPCs + the PostgREST 1000-row-cap regression & `fetchAll` fix, security hardening (role escalation + integration secrets), `lazyWithRetry` stale-chunk recovery, Comparison batch-render + serial numbers, sidebar h-screen fix, Business Insights page. Production/mobile decisions locked (Entra + Cloudflare Access + Capacitor login-gated). Env-var refactor for UAT/prod split still pending._
+
+## 26. 2026-08-05/06 — Dashboard rebuilt as a Power-BI-style report (full-bleed, fit-to-viewport)
+
+### A. Complete Dashboard rewrite (`src/pages/Dashboard.jsx`) — Recharts (v2.13.3)
+Replaced the old status-board Dashboard with an executive report. Everything is computed LIVE from the data hooks (auto-updates every load). Layout: KPI strip + 3 flex-1 panel rows.
+- **6 KPI cards** (definitions the user asked to validate):
+  - **Products Monitored** = count of products with ≥1 competitor that has a CURRENT price (`rivalCount>0`, i.e. `get_latest_prices` returned a price). `of N` = total `products` rows. A product whose only rival is out-of-stock (valid link, no price) counts as NOT monitored — the metric requires a real price. (User asked why "509/545"; the 545 in the shared image was mock data, live tile is real. Offered alt definition = "has any scraped link".)
+  - **Competitors Tracked** = distinct competitor_ids among cps that have a current price.
+  - **Price Match Rate** = % of positioned products where you're cheapest OR within ±1% (= "% competitive", user's chosen definition).
+  - **Total at Risk** = Σ(yourPrice − cheapest rival) over above-market products (KD).
+  - **Avg Gap vs Cheapest** = mean `gapVsMinPct` over positioned products (signed %).
+  - **Competitor Out-of-Stock** = count of competitor listings with `in_stock=false` (+ % of tracked links). NB COMPETITOR stock — we do NOT track the user's own inventory (their explicit decision: drop all "your stock" visuals).
+- **Charts:** Market Position donut (cheapest/match/above/below) · Competitor Stock donut (In/Out only — boolean, no low-stock) · Price Position Trend line · Top Products by Opportunity table · Cheapest Competitor by Category table · Recent Price Moves feed · Price Distribution histogram (gap-vs-cheapest buckets) · Price Changes 24h tiles.
+- `computeSuggestion` still exported (BusinessInsights imports it). Palette: cheapest=emerald, match=blue, below=amber, above=red.
+
+### B. Price Position Trend — `get_position_trend(days)` RPC (`supabase/migrations/position-trend-rpc.sql`, MUST run)
+- Reconstructs the daily position mix from **competitor price history (carried forward per cp, as-of each day) + the product's CURRENT price**. Applies today's own-price backward — an APPROXIMATION of the past, agreed with the user until they link their own product URLs (then their price history feeds it). Exact going forward.
+- Buckets mirror the client `productIntel` logic (cheapest/above/match/below via min & avg rival). `SECURITY INVOKER`, bounded to a `days+45` history window, `is_suspect=false`.
+- **User's answer on the trend:** "for now take the prices I've manually provided you; going forward I will link my products to my website url so you can fetch the required details" → reconstruction now, own-URL scraping later.
+
+### C. Full-bleed, fit-to-viewport layout (`src/components/Layout.jsx` + Dashboard)
+- User wanted a Power-BI look: no side whitespace, no page scroll, no header text, fits one screen.
+- **Layout:** `useLocation()`; on route `/` (`fullBleed`), `<main>` becomes `overflow-hidden` and the inner container drops `max-w-[1240px]` + big padding for `h-full px-4 py-3`. Other routes unchanged (keep readable max-width). Composes with the §25 sidebar `h-screen` shell (main is already a fixed-height flex child).
+- **Dashboard:** `h-full flex flex-col gap-2.5`; KPI row `flex-shrink-0`, three panel rows `flex-1 min-h-0`. Panels `flex flex-col min-h-0`; charts `ResponsiveContainer height="100%"`; tables/lists `overflow-auto h-full` so a long tile scrolls INTERNALLY (page never scrolls). Donuts use %-radius so they scale to tile height. Removed the greeting `PageHeader`.
+- Caveat: on very short viewports the 3 rows get tight (charts shrink, tiles scroll) — offered to rebalance row heights.
+
+### D. Migrations outstanding for the user to run
+`position-trend-rpc.sql` (new, for the trend). Earlier ones already applied: `latest-values-rpc.sql`, `security-hardening.sql`.
+
+_Last updated: 2026-08-06 — Dashboard rebuilt as a live Power-BI-style report (6 KPIs, position/stock donuts, position-trend via new `get_position_trend` RPC, opportunity/category tables, distribution + 24h-changes), full-bleed fit-to-viewport layout (Layout `fullBleed` on `/`, no header, no page scroll). Metric definitions validated with the user. Run `position-trend-rpc.sql`. Still pending: env-var refactor for UAT/prod + Entra/Cloudflare Access + Capacitor mobile._
