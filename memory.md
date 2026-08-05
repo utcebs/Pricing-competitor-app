@@ -749,3 +749,50 @@ User is planning production release with **staging(UAT) + prod**, iOS+Android ap
 b492ae4, aceb35a, 2f9ceab (products bulk delete + linking + memory §23), 7fc13e7 (fils/OOS — later reverted fils), b5e9e06 (loop), c4cb885 (Docker), 9c852af (disable GH ticks), 6233776 (Xcite fast-path), ecd6402 (Best fast-path), 689929b (OOM fix), 712693c (stale-price "no price").
 
 _Last updated: 2026-07-30 — Render continuous worker (Docker/Playwright image), browser-free fast-paths for all 3 competitors, OOM fix (no-browser-fallback), Xcite carousel-contamination + stale-discontinued-price fixes, OOS coloring. Scraping confirmed healthy._
+
+## 25. 2026-08-02/03 — perf RPCs, the 1000-row regression, security hardening, resilience, UI moves
+
+### A. Xcite discontinued = out-of-stock, NOT invalid (`worker/src/fast-paths.js`)
+- A discontinued Xcite product (e.g. `/1901236/p`) serves a real page: `meta.product` present, `status: "Discontinued"`, **numeric SKU as the name** (`"1901236"`), no price. Browser render confirms it's a real page (not a 404).
+- Old guard required the name to contain letters → these valid pages were mislabeled "invalid link". **New rule: `meta.product` present ⇒ valid product** (show price if any, else out-of-stock); only a true 404 (no `meta.product`) is invalid. Do NOT require the name to have letters.
+- Best OCC returns a **price even when `stock.stockLevelStatus: "outOfStock"`** (stockLevel 0) — that's a valid OOS item, show the price in amber, not invalid.
+- Takeaway for "why is X invalid" reports: trace the actual URL through the extractor + a browser render before assuming a bug — several reported "invalid" items were genuinely 404/discontinued/OOS. Stale "invalid" labels usually just need a re-scrape (data was recorded pre-fix).
+
+### B. Latest-price/stock moved server-side — DISTINCT ON RPCs (`supabase/migrations/latest-values-rpc.sql`)
+- Comparison + Dashboard used to download the ENTIRE 60-day `price_history`/`stock_history` (up to ~50k rows each) to the browser and dedupe in JS → slow, grows forever. Dashboard also sent a 1500-UUID `.in()` filter (multi-KB URL).
+- New `get_latest_prices(days)` / `get_latest_stock(days)` = `DISTINCT ON (competitor_product_id) … ORDER BY captured_at DESC`, `SECURITY INVOKER`. Return ONE row per cp off the existing `(competitor_product_id, captured_at DESC)` index. New `fetchLatestPrices()`/`fetchLatestStock()` in `src/lib/db.js` call them, with a transparent fallback to the old paginator if un-migrated.
+- **GOTCHA: `competitor_product_id` is `bigint`, not `uuid`** — RPC `RETURNS TABLE` column types must be `bigint` or you get `return type mismatch … returns bigint instead of uuid`.
+
+### C. ⚠️ THE BIG ONE — PostgREST caps EVERY response at 1000 rows, RPCs included
+- Calling `supabase.rpc('get_latest_prices')` as a single request silently returned only the first 1000 rows → any account with >1000 priced competitor_products lost every row past 1000, which rendered as **"invalid link"** (mass regression: "prices that were fine are now invalid"). The old table code paged with `.range()`; the RPC path did not.
+- **Fix:** page the `rpc()` calls with `.range(start, start+999)` exactly like tables, AND add `ORDER BY competitor_product_id` to the function so range paging is deterministic.
+- **New primitive `fetchAll(makeQuery)` in `src/lib/db.js`** — the ONE safe "give me every row" helper (pages past the cap for tables and set-returning RPCs). Rule: never write a bare `.select()`/`.rpc()` that can return >1000 rows; route it through `useTable`, `fetchLatest*`, or `fetchAll`. Audit found + fixed two more latent sites in `Scrapers.jsx` (per-run `scrape_jobs` + a competitor's `competitor_products`).
+
+### D. Security hardening (`supabase/migrations/security-hardening.sql`) — from a full audit
+- Baseline is solid: RLS on every table, authenticated-read, admin/manager-write via `is_admin_or_manager()`, no secrets in the bundle (only anon key), worker uses `service_role` from env, no XSS sinks.
+- **CRITICAL fixed — privilege escalation:** `profiles` self-update policy let any user set their own `role='admin'` (a WITH CHECK can't compare OLD/NEW). Added `BEFORE UPDATE` trigger `guard_profile_privilege_change()` that rejects role changes by non-admins (backend/`service_role` where `auth.uid()` is null unaffected).
+- **HIGH fixed — secret exposure:** `integrations.config` (clientSecret/accessToken) + `integration_sync_log` payloads were readable by every authenticated user. Restricted SELECT to admins. Deeper follow-up (not done): move integration calls into Edge Functions so secrets never reach the client.
+- Remaining pre-launch: Supabase Auth hardening (MFA for admins, leaked-password protection, real SMTP + re-enable email confirmation), verify PITR/backups, `npm audit` in CI.
+
+### E. Resilience — stale-chunk auto-recovery (`src/App.jsx`)
+- Hash-based deploys (GH Pages) + open tab = navigating to a not-yet-loaded lazy route fetches an old chunk hash that no longer exists → page "won't load". `lazyWithRetry()` wraps every `lazy()`: on a failed dynamic import it reloads ONCE (session-guarded) to pull the fresh build, clears the guard on success. Only protects tabs already running a build that has it.
+
+### F. UI changes
+- **Comparison (`src/pages/Comparison.jsx`):** removed the hard 300-row cap; now progressive batch rendering (100 at a time, auto-loads on scroll via IntersectionObserver + "Load more" button), a continuous **serial number** column, and a "Showing X of Y" count. Export still emits the full filtered list.
+- **Layout (`src/components/Layout.jsx`):** sidebar used `min-h-screen` so a tall page scrolled the whole window and pushed the sign-out/EN-AR footer off-screen. Fixed to `h-screen` + `overflow-hidden` on the shell so `<main>` is the scroll container and the sidebar footer stays pinned.
+- **Business Insights (`src/pages/BusinessInsights.jsx`, new `/business-insights`):** moved the four "answer cards" (Priority · Upside · Intelligence · Action queue) off the Dashboard onto their own page (Insights nav section). Dashboard keeps its status board/KPIs + category perf + recent moves; `losingList` stays for the greeting line. `computeSuggestion` is exported from Dashboard and imported by the new page.
+
+### G. Scrape cadence (answer to "when does the next auto rescrape happen")
+- Per-5-min tick workflows are DISABLED (manual `workflow_dispatch` only). Automatic full re-scrape = `worker-daily.yml` cron `0 */6 * * *` → **00/06/12/18 UTC = 3 AM / 9 AM / 3 PM / 9 PM Kuwait**. `scheduled-fanout.js` enqueues a `scrape_run` for every active competitor; the Render loop processes the queue. "Re-scrape all" button on Comparison does it on demand. New products only get scraped on the next full cycle (offered but not built: auto-queue a `target_cp_id` run on add).
+
+### H. Production/mobile plan — DECISIONS LOCKED (this session)
+- Team ~25–50 · identity = **Microsoft 365 / Entra** · mobile = **public store, login-gated** · web = **add Cloudflare Access network gate**.
+- Design: Entra single-tenant app registration is the internal boundary; both Cloudflare Access (edge gate) and Supabase Auth (Azure provider) point at it. Mobile (Capacitor) bundles JS locally + talks to Supabase directly ⇒ bypasses Cloudflare Access, gated by Supabase Entra login. Public store listing is fine (login-gated); Apple needs a demo reviewer account.
+- Cloudflare: `base: './'` (relative) + HashRouter ⇒ migration is zero-code; GitHub stays as repo + Actions crons, only hosting moves off GH Pages. Free tier fine for this workload (100 projects; static unlimited; 100k Functions req/day is account-wide). One free account holds prod + UAT + Printer Pitstop.
+- Prereq for UAT/prod split: move hardcoded Supabase creds in `src/supabaseClient.js` (and worker) to env vars (`VITE_SUPABASE_URL`/`_ANON_KEY`). NOT yet done.
+- Full write-up delivered as a private Claude artifact (production/security blueprint).
+
+### I. Commits this session
+d646cdd (Xcite discontinued), latest-values-rpc + fetchLatest* (perf), bigint fix, security-hardening, RPC pagination fix (the 1000-row regression), fetchAll + Scrapers, lazyWithRetry, Comparison batch+serial, Layout h-screen, BusinessInsights page. All on `main`, pushed. Two migrations to run in SQL editor: `latest-values-rpc.sql` (re-run after the ORDER BY + bigint edits) and `security-hardening.sql` — both applied by user.
+
+_Last updated: 2026-08-03 — perf DISTINCT ON RPCs + the PostgREST 1000-row-cap regression & `fetchAll` fix, security hardening (role escalation + integration secrets), `lazyWithRetry` stale-chunk recovery, Comparison batch-render + serial numbers, sidebar h-screen fix, Business Insights page. Production/mobile decisions locked (Entra + Cloudflare Access + Capacitor login-gated). Env-var refactor for UAT/prod split still pending._
