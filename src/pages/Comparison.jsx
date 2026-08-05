@@ -141,11 +141,29 @@ export default function Comparison() {
       })
   }, [productComparisons, q, catFilter, sortBy])
 
-  // Perf guard — comparison table is wide (columns per competitor).
-  // Cap at 300 rows to keep DOM under ~10K cells even with 30+ competitors.
-  const RENDER_CAP = 300
-  const capped = visible.length > RENDER_CAP
-  const visibleRows = capped ? visible.slice(0, RENDER_CAP) : visible
+  // Progressive rendering — the table is wide (a column per competitor), so we
+  // paint in batches instead of every row at once. NOTHING is hidden: the batch
+  // grows as you scroll (an IntersectionObserver on a sentinel at the bottom)
+  // or click "Load more". Resets to the first batch whenever the filter/sort
+  // changes so you're not stranded deep in a long list after narrowing.
+  const RENDER_BATCH = 100
+  const [renderLimit, setRenderLimit] = useState(RENDER_BATCH)
+  useEffect(() => { setRenderLimit(RENDER_BATCH) }, [q, catFilter, sortBy])
+  const visibleRows = visible.slice(0, renderLimit)
+  const hasMore = visible.length > renderLimit
+
+  const loadMoreRef = useRef(null)
+  useEffect(() => {
+    if (!hasMore) return
+    const el = loadMoreRef.current
+    if (!el) return
+    const io = new IntersectionObserver(
+      entries => { if (entries[0]?.isIntersecting) setRenderLimit(n => n + RENDER_BATCH) },
+      { rootMargin: '600px' },   // begin loading the next batch before it's on screen
+    )
+    io.observe(el)
+    return () => io.disconnect()
+  }, [hasMore, renderLimit])
 
   // Group by category, preserving the sort order within each group.
   // Uncategorised bucket lands last.
@@ -171,6 +189,11 @@ export default function Comparison() {
   }, [visibleRows, categories])
 
   const totalColumns = 4 + competitors.length   // sticky+your+cheapest+gap + per-competitor
+
+  // Running serial number where each category group starts, in display order,
+  // so every product row can show a continuous line number (1..N).
+  let _serialAcc = 0
+  const groupSerialStart = categoryGroups.map(g => { const s = _serialAcc; _serialAcc += g.rows.length; return s })
 
   // Export the full FILTERED (not capped) comparison to Excel.
   // One row per product + one column per competitor.
@@ -306,9 +329,11 @@ export default function Comparison() {
 
       <ErrorBlock error={error} />
 
-      {capped && (
-        <div className="mb-3 text-[11.5px] px-3 py-2 bg-amber-50 border border-amber-100 rounded-lg text-amber-800 inline-flex items-center gap-2">
-          Showing first {RENDER_CAP} rows of {visible.length}. Filter above to narrow down.
+      {visible.length > 0 && (
+        <div className="mb-3 text-[11.5px] text-ink-500 flex items-center gap-1.5">
+          Showing <span className="font-semibold text-ink-700 tabular-nums">{Math.min(renderLimit, visible.length)}</span>
+          of <span className="font-semibold text-ink-700 tabular-nums">{visible.length}</span> products
+          {hasMore && <span className="text-ink-400">· scroll for more</span>}
         </div>
       )}
 
@@ -317,11 +342,12 @@ export default function Comparison() {
           <Empty icon={GitCompare} title="Nothing to compare yet"
             description="Add products, competitors, and link them on the Linked Items page. Prices will appear as they're scraped." />
         ) : (
+          <>
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead className="bg-canvas-100 border-b border-ink-200">
                 <tr>
-                  <Th className="sticky left-0 bg-canvas-100 z-10 min-w-[240px]">Product</Th>
+                  <Th className="sticky left-0 bg-canvas-100 z-10 min-w-[240px]"><span className="text-ink-400">#</span>&nbsp;&nbsp;Product</Th>
                   <Th className="text-right">Your Price</Th>
                   <Th className="text-right">Cheapest Rival</Th>
                   <Th className="text-right">Gap vs Lowest</Th>
@@ -334,7 +360,7 @@ export default function Comparison() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-ink-100">
-                {categoryGroups.map(group => (
+                {categoryGroups.map((group, gi) => (
                   <React.Fragment key={group.key}>
                     <tr className="bg-canvas-100 sticky top-0 z-20">
                       <td colSpan={totalColumns}
@@ -349,21 +375,26 @@ export default function Comparison() {
                         </div>
                       </td>
                     </tr>
-                    {group.rows.map(pc => (
+                    {group.rows.map((pc, ri) => (
                   <tr key={pc.product.id} className="hover:bg-canvas-100/60 transition-colors">
                     <Td className="sticky left-0 bg-white hover:bg-canvas-100/60 z-10">
-                      <NavLink to="/prices" className="group flex items-center gap-3">
-                        <ProductThumb src={pc.image} name={pc.product.name} />
-                        <div className="min-w-0">
-                          <div className="font-semibold text-ink-900 text-[13.5px] group-hover:text-brand-700 truncate">
-                            {pc.product.name}
+                      <div className="flex items-center gap-3">
+                        <span className="text-[11px] tabular-nums text-ink-400 w-9 text-right shrink-0">
+                          {groupSerialStart[gi] + ri + 1}
+                        </span>
+                        <NavLink to="/prices" className="group flex items-center gap-3 min-w-0">
+                          <ProductThumb src={pc.image} name={pc.product.name} />
+                          <div className="min-w-0">
+                            <div className="font-semibold text-ink-900 text-[13.5px] group-hover:text-brand-700 truncate">
+                              {pc.product.name}
+                            </div>
+                            <div className="flex items-center gap-2 mt-0.5">
+                              <span className="font-mono text-[10.5px] text-ink-500">{pc.product.sku}</span>
+                              {pc.product.brand && <span className="text-[10.5px] text-ink-400">· {pc.product.brand}</span>}
+                            </div>
                           </div>
-                          <div className="flex items-center gap-2 mt-0.5">
-                            <span className="font-mono text-[10.5px] text-ink-500">{pc.product.sku}</span>
-                            {pc.product.brand && <span className="text-[10.5px] text-ink-400">· {pc.product.brand}</span>}
-                          </div>
-                        </div>
-                      </NavLink>
+                        </NavLink>
+                      </div>
                     </Td>
                     <Td className="text-right tabular-nums font-semibold text-ink-900">
                       {pc.yourPrice != null
@@ -447,6 +478,14 @@ export default function Comparison() {
               </tbody>
             </table>
           </div>
+          {hasMore && (
+            <div ref={loadMoreRef} className="flex items-center justify-center py-4 border-t border-ink-100">
+              <Button variant="secondary" onClick={() => setRenderLimit(n => n + RENDER_BATCH)}>
+                Load more — {visible.length - renderLimit} remaining
+              </Button>
+            </div>
+          )}
+          </>
         )}
       </Card>
 
