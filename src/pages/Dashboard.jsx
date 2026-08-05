@@ -7,12 +7,10 @@ import {
 import {
   Package, Building2, ShieldCheck, Flame, Scale, PackageX,
   TrendingUp, TrendingDown, ArrowRight, ArrowUpRight, ArrowDownRight,
-  Clock, Radio,
 } from 'lucide-react'
 import { supabase } from '../supabaseClient'
 import { useTable, fetchLatestPrices, fetchLatestStock } from '../lib/db'
-import { useAuth } from '../lib/auth'
-import { PageHeader, Card, LoadingBlock } from '../components/UI'
+import { Card, LoadingBlock } from '../components/UI'
 
 /**
  * Suggest a price that beats the cheapest rival by 1 fils, never below the
@@ -54,7 +52,6 @@ const STOCK = { in: '#10b981', out: '#ef4444' }
  * the deeper "what should I do" analysis.
  */
 export default function Dashboard() {
-  const { profile } = useAuth()
   const { rows: products, loading: pLoading } = useTable('products', { order: ['name', { ascending: true }] })
   const { rows: competitors } = useTable('competitors', { eq: ['is_active', true] })
   const { rows: cps } = useTable('competitor_products', { eq: ['is_active', true] })
@@ -64,7 +61,6 @@ export default function Dashboard() {
   const [latestStock, setLatestStock] = useState({})
   const [priceHistory, setPriceHistory] = useState([])
   const [trend, setTrend] = useState([])
-  const [scrapeRuns, setScrapeRuns] = useState([])
 
   useEffect(() => { fetchLatestPrices(60).then(({ prices }) => setLatestPrices(prices)).catch(() => setLatestPrices({})) }, [])
   useEffect(() => { fetchLatestStock(60).then(setLatestStock).catch(() => setLatestStock({})) }, [])
@@ -85,13 +81,6 @@ export default function Dashboard() {
     supabase.rpc('get_position_trend', { days: 14 })
       .then(({ data }) => setTrend(Array.isArray(data) ? data : []))
       .catch(() => setTrend([]))
-  }, [])
-
-  useEffect(() => {
-    supabase.from('scrape_runs')
-      .select('status, started_at, finished_at')
-      .order('created_at', { ascending: false }).limit(5)
-      .then(({ data }) => setScrapeRuns(data || []))
   }, [])
 
   // ── Per-product intelligence ────────────────────────────
@@ -281,27 +270,12 @@ export default function Dashboard() {
     return moves.sort((a, b) => new Date(b.at) - new Date(a.at)).slice(0, 6)
   }, [priceHistory])
 
-  const lastScan = scrapeRuns.find(r => r.started_at)?.started_at
-  const greeting = timeGreeting()
-  const name = profile?.full_name?.split(' ')[0] || profile?.email?.split('@')[0] || ''
-
-  if (pLoading) return <div className="pt-4"><LoadingBlock text="Building report" /></div>
+  if (pLoading) return <div className="h-full flex items-center justify-center"><LoadingBlock text="Building report" /></div>
 
   return (
-    <div>
-      <PageHeader
-        kicker="Competitive Pricing"
-        title={`${greeting}${name ? ', ' + name : ''}.`}
-        subtitle="Live market position, price opportunity, and competitor stock — refreshed on every scrape."
-        action={lastScan && (
-          <div className="text-[11px] text-ink-500 inline-flex items-center gap-1.5" title="Most recent scrape">
-            <Radio size={12} className="text-emerald-500" /> Last scan {relTime(new Date(lastScan))}
-          </div>
-        )}
-      />
-
+    <div className="h-full flex flex-col gap-2.5 min-h-0">
       {/* ── KPI row ─────────────────────────────────────── */}
-      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 mb-5">
+      <div className="grid grid-cols-3 xl:grid-cols-6 gap-2.5 flex-shrink-0">
         <Kpi icon={Package} tone="ink" label="Products Monitored" value={trackedCount}
           hint={`${coveragePct}% of ${totalProducts} products`} />
         <Kpi icon={Building2} tone="blue" label="Competitors Tracked" value={competitorsTracked}
@@ -318,7 +292,7 @@ export default function Dashboard() {
       </div>
 
       {/* ── Row 2: donut · trend · donut ───────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-2.5 flex-1 min-h-0">
         <Panel title="Market Position Overview" subtitle="Where your prices sit vs the cheapest rival">
           <DonutWithCenter data={positionDonut} centerValue={positioned.length} centerLabel="Products" />
         </Panel>
@@ -328,7 +302,7 @@ export default function Dashboard() {
           {trendData.length === 0 ? (
             <EmptyChart text="Trend builds as scrape history accrues." />
           ) : (
-            <ResponsiveContainer width="100%" height={230}>
+            <ResponsiveContainer width="100%" height="100%">
               <LineChart data={trendData} margin={{ top: 8, right: 8, left: -12, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#eee" vertical={false} />
                 <XAxis dataKey="day" tick={{ fontSize: 10, fill: '#9ca3af' }} tickLine={false} axisLine={false} />
@@ -350,11 +324,11 @@ export default function Dashboard() {
       </div>
 
       {/* ── Row 3: opportunities · category · alerts ───── */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 mb-4">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-2.5 flex-1 min-h-0">
         <Panel title="Top Products by Price Opportunity" subtitle="You're above the cheapest rival — biggest savings first"
           className="lg:col-span-5" bodyClass="p-0">
           {topOpportunities.length === 0 ? <EmptyChart text="You're competitive on every tracked product." /> : (
-            <div className="overflow-x-auto">
+            <div className="overflow-auto h-full">
               <table className="w-full text-sm">
                 <thead><tr className="text-[10px] uppercase tracking-wide text-ink-400 border-b border-ink-100">
                   <Th>#</Th><Th>Product</Th><Th className="text-right">Your</Th><Th className="text-right">Cheapest</Th>
@@ -383,7 +357,7 @@ export default function Dashboard() {
         <Panel title="Cheapest Competitor by Category" subtitle="Who leads price in each category"
           className="lg:col-span-4" bodyClass="p-0">
           {cheapestByCategory.length === 0 ? <EmptyChart text="No category price data yet." /> : (
-            <div className="overflow-x-auto">
+            <div className="overflow-auto h-full">
               <table className="w-full text-sm">
                 <thead><tr className="text-[10px] uppercase tracking-wide text-ink-400 border-b border-ink-100">
                   <Th>Category</Th><Th>Cheapest</Th><Th className="text-right">% Cheapest</Th><Th className="text-right">Avg Diff</Th>
@@ -409,7 +383,7 @@ export default function Dashboard() {
 
         <Panel title="Recent Price Moves" subtitle="Competitor changes, last 72h" className="lg:col-span-3" bodyClass="p-0">
           {recentMoves.length === 0 ? <EmptyChart text="No competitor moves recently." /> : (
-            <div className="divide-y divide-ink-50">
+            <div className="divide-y divide-ink-50 overflow-auto h-full">
               {recentMoves.map((m, i) => (
                 <div key={i} className="px-4 py-2.5">
                   <div className="text-[12px] font-medium text-ink-900 truncate">{m.name}</div>
@@ -429,25 +403,29 @@ export default function Dashboard() {
       </div>
 
       {/* ── Row 4: distribution · price changes ─────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-2.5 flex-1 min-h-0">
         <Panel title="Price Distribution" subtitle="Your gap vs the cheapest rival (%)" className="lg:col-span-2">
-          <ResponsiveContainer width="100%" height={210}>
-            <BarChart data={distribution} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#eee" vertical={false} />
-              <XAxis dataKey="label" tick={{ fontSize: 9, fill: '#9ca3af' }} tickLine={false} axisLine={false} interval={0} angle={-20} textAnchor="end" height={42} />
-              <YAxis tick={{ fontSize: 10, fill: '#9ca3af' }} tickLine={false} axisLine={false} width={30} allowDecimals={false} />
-              <Tooltip contentStyle={tooltipStyle} formatter={(v) => [`${v} products`, '']} labelFormatter={l => `Gap ${l}%`} />
-              <Bar dataKey="count" radius={[3, 3, 0, 0]}>
-                {distribution.map((d, i) => {
-                  const lbl = d.label
-                  const color = lbl.startsWith('<') || lbl.startsWith('-') ? POS.cheapest.color
-                    : lbl === '0..5' ? POS.match.color : POS.above.color
-                  return <Cell key={i} fill={color} />
-                })}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-          <div className="text-[10px] text-ink-400 text-center mt-1">← cheaper than rivals · pricier than rivals →</div>
+          <div className="h-full flex flex-col">
+            <div className="flex-1 min-h-0">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={distribution} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#eee" vertical={false} />
+                  <XAxis dataKey="label" tick={{ fontSize: 9, fill: '#9ca3af' }} tickLine={false} axisLine={false} interval={0} angle={-20} textAnchor="end" height={42} />
+                  <YAxis tick={{ fontSize: 10, fill: '#9ca3af' }} tickLine={false} axisLine={false} width={30} allowDecimals={false} />
+                  <Tooltip contentStyle={tooltipStyle} formatter={(v) => [`${v} products`, '']} labelFormatter={l => `Gap ${l}%`} />
+                  <Bar dataKey="count" radius={[3, 3, 0, 0]}>
+                    {distribution.map((d, i) => {
+                      const lbl = d.label
+                      const color = lbl.startsWith('<') || lbl.startsWith('-') ? POS.cheapest.color
+                        : lbl === '0..5' ? POS.match.color : POS.above.color
+                      return <Cell key={i} fill={color} />
+                    })}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="text-[10px] text-ink-400 text-center flex-shrink-0">← cheaper than rivals · pricier than rivals →</div>
+          </div>
         </Panel>
 
         <Panel title="Price Changes (24h)" subtitle="Competitor movements in the last day">
@@ -477,25 +455,25 @@ const tooltipStyle = { fontSize: 11, borderRadius: 8, border: '1px solid #e5e7eb
 
 function Kpi({ icon: Icon, label, value, hint, tone = 'ink' }) {
   return (
-    <Card className="p-4">
-      <div className="flex items-center justify-between">
-        <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-ink-500 leading-tight">{label}</div>
-        <span className={`inline-flex items-center justify-center w-7 h-7 rounded-lg ${TONES[tone]}`}><Icon size={14} /></span>
+    <Card className="px-3.5 py-2.5">
+      <div className="flex items-center justify-between gap-1">
+        <div className="text-[9.5px] font-semibold uppercase tracking-[0.1em] text-ink-500 leading-tight truncate">{label}</div>
+        <span className={`inline-flex items-center justify-center w-6 h-6 rounded-md flex-shrink-0 ${TONES[tone]}`}><Icon size={13} /></span>
       </div>
-      <div className="font-display text-[26px] leading-none text-ink-900 mt-3 tabular-nums">{value}</div>
-      <div className="text-[10.5px] text-ink-500 mt-1.5">{hint}</div>
+      <div className="font-display text-[22px] leading-none text-ink-900 mt-1.5 tabular-nums">{value}</div>
+      <div className="text-[10px] text-ink-500 mt-1 truncate">{hint}</div>
     </Card>
   )
 }
 
 function Panel({ title, subtitle, children, className = '', bodyClass = '' }) {
   return (
-    <Card className={`overflow-hidden flex flex-col ${className}`}>
-      <div className="px-5 py-3.5 border-b border-ink-100">
-        <div className="font-display text-[15px] tracking-tight text-ink-900">{title}</div>
-        {subtitle && <div className="text-[11px] text-ink-500 mt-0.5">{subtitle}</div>}
+    <Card className={`overflow-hidden flex flex-col min-h-0 ${className}`}>
+      <div className="px-4 py-2 border-b border-ink-100 flex-shrink-0">
+        <div className="font-display text-[13.5px] tracking-tight text-ink-900 leading-tight">{title}</div>
+        {subtitle && <div className="text-[10px] text-ink-400 mt-0.5 truncate">{subtitle}</div>}
       </div>
-      <div className={`flex-1 ${bodyClass || 'p-4'}`}>{children}</div>
+      <div className={`flex-1 min-h-0 ${bodyClass || 'p-3'}`}>{children}</div>
     </Card>
   )
 }
@@ -504,29 +482,29 @@ function DonutWithCenter({ data, centerValue, centerLabel }) {
   if (!data.length) return <EmptyChart text="No data yet." />
   const total = data.reduce((s, d) => s + d.value, 0) || 1
   return (
-    <div className="flex items-center gap-2">
-      <div className="relative" style={{ width: 150, height: 180 }}>
+    <div className="flex items-center gap-2 h-full">
+      <div className="relative h-full flex-shrink-0" style={{ width: 118, minHeight: 120 }}>
         <ResponsiveContainer width="100%" height="100%">
           <PieChart>
             <Pie data={data} dataKey="value" nameKey="name" cx="50%" cy="50%"
-              innerRadius={48} outerRadius={70} paddingAngle={2} stroke="none">
+              innerRadius="60%" outerRadius="92%" paddingAngle={2} stroke="none">
               {data.map((d, i) => <Cell key={i} fill={d.color} />)}
             </Pie>
             <Tooltip contentStyle={tooltipStyle} formatter={(v, n) => [`${v} (${Math.round(v / total * 100)}%)`, n]} />
           </PieChart>
         </ResponsiveContainer>
         <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-          <div className="font-display text-[22px] leading-none text-ink-900 tabular-nums">{centerValue}</div>
-          <div className="text-[9px] uppercase tracking-wide text-ink-400 mt-0.5">{centerLabel}</div>
+          <div className="font-display text-[19px] leading-none text-ink-900 tabular-nums">{centerValue}</div>
+          <div className="text-[8px] uppercase tracking-wide text-ink-400 mt-0.5">{centerLabel}</div>
         </div>
       </div>
-      <div className="flex-1 space-y-1.5">
+      <div className="flex-1 space-y-1 min-w-0">
         {data.map((d, i) => (
-          <div key={i} className="flex items-center gap-2 text-[11.5px]">
+          <div key={i} className="flex items-center gap-1.5 text-[11px]">
             <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ background: d.color }} />
             <span className="text-ink-600 flex-1 truncate">{d.name}</span>
             <span className="tabular-nums font-semibold text-ink-800">{d.value}</span>
-            <span className="tabular-nums text-ink-400 w-9 text-right">{Math.round(d.value / total * 100)}%</span>
+            <span className="tabular-nums text-ink-400 w-8 text-right">{Math.round(d.value / total * 100)}%</span>
           </div>
         ))}
       </div>
@@ -564,10 +542,6 @@ function Td({ children, className = '' }) {
 function fmtDay(d) {
   const dt = new Date(d)
   return dt.toLocaleDateString('en', { month: 'short', day: 'numeric' })
-}
-function timeGreeting() {
-  const h = new Date().getHours()
-  return h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening'
 }
 function relTime(dt) {
   const s = Math.floor((Date.now() - dt.getTime()) / 1000)

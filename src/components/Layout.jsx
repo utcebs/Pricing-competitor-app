@@ -1,5 +1,5 @@
 import { Suspense } from 'react'
-import { NavLink, Outlet, Navigate } from 'react-router-dom'
+import { NavLink, Outlet, Navigate, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, Package, Building2, LineChart, Bell,
   FileBarChart, Settings, LogOut, Link2, DollarSign,
@@ -53,6 +53,10 @@ const ADMIN_NAV = [
 export default function Layout() {
   const { user, profile, loading, isAdmin, isManager, signOut } = useAuth()
   const { t, i18n } = useTranslation()
+  const { pathname } = useLocation()
+  // The Dashboard is a full-bleed, fit-to-viewport Power-BI-style report:
+  // no max-width, minimal padding, and the page itself never scrolls.
+  const fullBleed = pathname === '/'
 
   if (loading) {
     return (
@@ -149,8 +153,8 @@ export default function Layout() {
       </aside>
 
       {/* ── Main ────────────────────────────────────────── */}
-      <main className="flex-1 overflow-y-auto relative">
-        <div className="max-w-[1240px] mx-auto px-8 lg:px-12 py-10">
+      <main className={`flex-1 relative ${fullBleed ? 'overflow-hidden' : 'overflow-y-auto'}`}>
+        <div className={fullBleed ? 'h-full px-4 py-3' : 'max-w-[1240px] mx-auto px-8 lg:px-12 py-10'}>
           {/* Suspense INSIDE the layout — sidebar stays put while the page chunk loads.
               Fallback matches the canvas colour so there's no white flash mid-navigation.
               ErrorBoundary keyed on pathname so a page crash resets when the user
