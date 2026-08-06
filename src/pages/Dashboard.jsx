@@ -6,10 +6,11 @@ import {
 } from 'recharts'
 import {
   Package, Building2, ShieldCheck, Flame, Scale, PackageX,
-  TrendingUp, TrendingDown, ArrowRight, ArrowUpRight, ArrowDownRight,
+  TrendingUp, TrendingDown, ArrowRight, ArrowUpRight, ArrowDownRight, Bell,
 } from 'lucide-react'
 import { supabase } from '../supabaseClient'
 import { useTable, fetchLatestPrices, fetchLatestStock } from '../lib/db'
+import { useAuth } from '../lib/auth'
 import { Card, LoadingBlock } from '../components/UI'
 
 /**
@@ -52,6 +53,7 @@ const STOCK = { in: '#10b981', out: '#ef4444' }
  * the deeper "what should I do" analysis.
  */
 export default function Dashboard() {
+  const { profile } = useAuth()
   const { rows: products, loading: pLoading } = useTable('products', { order: ['name', { ascending: true }] })
   const { rows: competitors } = useTable('competitors', { eq: ['is_active', true] })
   const { rows: cps } = useTable('competitor_products', { eq: ['is_active', true] })
@@ -60,7 +62,8 @@ export default function Dashboard() {
   const [latestPrices, setLatestPrices] = useState({})
   const [latestStock, setLatestStock] = useState({})
   const [priceHistory, setPriceHistory] = useState([])
-  const [trend, setTrend] = useState([])
+  const [metrics, setMetrics] = useState([])       // daily series → trend + sparklines
+  const [rangeDays, setRangeDays] = useState(14)
 
   useEffect(() => { fetchLatestPrices(60).then(({ prices }) => setLatestPrices(prices)).catch(() => setLatestPrices({})) }, [])
   useEffect(() => { fetchLatestStock(60).then(setLatestStock).catch(() => setLatestStock({})) }, [])
@@ -76,12 +79,12 @@ export default function Dashboard() {
       .then(({ data }) => setPriceHistory(data || []))
   }, [])
 
-  // Position trend (server-side reconstruction).
+  // Daily metrics (server-side reconstruction) — powers the trend + KPI sparklines.
   useEffect(() => {
-    supabase.rpc('get_position_trend', { days: 14 })
-      .then(({ data }) => setTrend(Array.isArray(data) ? data : []))
-      .catch(() => setTrend([]))
-  }, [])
+    supabase.rpc('get_daily_metrics', { days: rangeDays })
+      .then(({ data }) => setMetrics(Array.isArray(data) ? data : []))
+      .catch(() => setMetrics([]))
+  }, [rangeDays])
 
   // ── Per-product intelligence ────────────────────────────
   const productIntel = useMemo(() => {
@@ -165,7 +168,7 @@ export default function Dashboard() {
   ].filter(d => d.value > 0)
 
   // Trend → % of positioned products in each bucket per day.
-  const trendData = useMemo(() => trend.map(r => {
+  const trendData = useMemo(() => metrics.map(r => {
     const total = (r.cheapest + r.matchp + r.above + r.below) || 1
     return {
       day: fmtDay(r.day),
@@ -174,7 +177,17 @@ export default function Dashboard() {
       'Above Market': +(r.above / total * 100).toFixed(1),
       'Below Market': +(r.below / total * 100).toFixed(1),
     }
-  }), [trend])
+  }), [metrics])
+
+  // Real KPI sparkline series (from the same daily metrics).
+  const spark = useMemo(() => ({
+    monitored:   metrics.map(m => m.monitored),
+    competitors: metrics.map(m => m.competitors),
+    matchRate:   metrics.map(m => m.monitored ? Math.round((m.cheapest + m.matchp) / m.monitored * 100) : 0),
+    atRisk:      metrics.map(m => Number(m.at_risk)),
+    avgGap:      metrics.map(m => Number(m.avg_gap)),
+    oos:         metrics.map(m => m.oos),
+  }), [metrics])
 
   // Top products by price opportunity (above market, ranked by KD you could save)
   const topOpportunities = useMemo(() => productIntel
@@ -274,21 +287,42 @@ export default function Dashboard() {
 
   return (
     <div className="h-full flex flex-col gap-2.5 min-h-0">
+      {/* ── Slim top bar ───────────────────────────────── */}
+      <div className="flex items-center justify-end gap-2 flex-shrink-0 -mb-0.5">
+        <div className="relative">
+          <select value={rangeDays} onChange={e => setRangeDays(Number(e.target.value))}
+            className="appearance-none text-[11.5px] font-medium text-ink-600 bg-white border border-ink-200 rounded-lg pl-3 pr-7 py-1.5 hover:border-ink-300 focus:outline-none focus:ring-1 focus:ring-brand-300 cursor-pointer">
+            <option value={7}>Last 7 days</option>
+            <option value={14}>Last 14 days</option>
+            <option value={30}>Last 30 days</option>
+          </select>
+          <ArrowDownRight size={11} className="absolute right-2 top-1/2 -translate-y-1/2 rotate-45 text-ink-400 pointer-events-none" />
+        </div>
+        <NavLink to="/alerts" title="Alerts"
+          className="w-8 h-8 inline-flex items-center justify-center rounded-lg border border-ink-200 bg-white text-ink-500 hover:text-brand-700 hover:border-ink-300 transition-colors">
+          <Bell size={15} />
+        </NavLink>
+        <div className="w-8 h-8 rounded-full bg-ink-900 text-white text-[12px] font-semibold inline-flex items-center justify-center"
+          title={profile?.email}>
+          {(profile?.full_name || profile?.email || '?').trim().charAt(0).toUpperCase()}
+        </div>
+      </div>
+
       {/* ── KPI row ─────────────────────────────────────── */}
       <div className="grid grid-cols-3 xl:grid-cols-6 gap-2.5 flex-shrink-0">
         <Kpi icon={Package} tone="ink" label="Products Monitored" value={trackedCount}
-          hint={`${coveragePct}% of ${totalProducts} products`} />
+          hint={`${coveragePct}% of ${totalProducts} products`} spark={spark.monitored} />
         <Kpi icon={Building2} tone="blue" label="Competitors Tracked" value={competitorsTracked}
-          hint={`${competitors.length} active marketplaces`} />
+          hint={`${competitors.length} active marketplaces`} spark={spark.competitors} />
         <Kpi icon={ShieldCheck} tone="emerald" label="Price Match Rate" value={`${matchRate}%`}
-          hint="At or below cheapest rival" />
+          hint="At or below cheapest rival" spark={spark.matchRate} />
         <Kpi icon={Flame} tone="red" label="Total at Risk" value={`KD ${totalAtRisk.toFixed(3)}`}
-          hint={`${aboveN} product${aboveN === 1 ? '' : 's'} above market`} />
+          hint={`${aboveN} product${aboveN === 1 ? '' : 's'} above market`} spark={spark.atRisk} />
         <Kpi icon={Scale} tone={avgGap != null && avgGap > 0 ? 'red' : 'emerald'} label="Avg Gap vs Cheapest"
           value={avgGap == null ? '—' : `${avgGap > 0 ? '+' : ''}${avgGap.toFixed(1)}%`}
-          hint="Mean position vs lowest rival" />
+          hint="Mean position vs lowest rival" spark={spark.avgGap} />
         <Kpi icon={PackageX} tone="amber" label="Competitor Out-of-Stock" value={stockStats.out}
-          hint={`${oosPct}% of ${stockStats.total} tracked links`} />
+          hint={`${oosPct}% of ${stockStats.total} tracked links`} spark={spark.oos} />
       </div>
 
       {/* ── Row 2: donut · trend · donut ───────────────── */}
@@ -297,7 +331,7 @@ export default function Dashboard() {
           <DonutWithCenter data={positionDonut} centerValue={positioned.length} centerLabel="Products" />
         </Panel>
 
-        <Panel title="Price Position Trend" subtitle="Share of products in each position over time (14d)"
+        <Panel title="Price Position Trend" subtitle={`Share of products in each position (${rangeDays}d)`}
           className="lg:col-span-1">
           {trendData.length === 0 ? (
             <EmptyChart text="Trend builds as scrape history accrues." />
@@ -453,7 +487,9 @@ const TONES = {
 }
 const tooltipStyle = { fontSize: 11, borderRadius: 8, border: '1px solid #e5e7eb', boxShadow: '0 4px 12px rgba(0,0,0,.08)' }
 
-function Kpi({ icon: Icon, label, value, hint, tone = 'ink' }) {
+const SPARK_COLOR = { ink: '#64748b', blue: '#3b82f6', emerald: '#10b981', red: '#ef4444', amber: '#f59e0b' }
+
+function Kpi({ icon: Icon, label, value, hint, tone = 'ink', spark }) {
   return (
     <Card className="px-3.5 py-2.5">
       <div className="flex items-center justify-between gap-1">
@@ -461,8 +497,39 @@ function Kpi({ icon: Icon, label, value, hint, tone = 'ink' }) {
         <span className={`inline-flex items-center justify-center w-6 h-6 rounded-md flex-shrink-0 ${TONES[tone]}`}><Icon size={13} /></span>
       </div>
       <div className="font-display text-[22px] leading-none text-ink-900 mt-1.5 tabular-nums">{value}</div>
-      <div className="text-[10px] text-ink-500 mt-1 truncate">{hint}</div>
+      <div className="flex items-end justify-between gap-2 mt-1.5">
+        <div className="text-[10px] text-ink-500 truncate flex-1">{hint}</div>
+        {spark && spark.length > 1 && (
+          <div className="w-[62px] h-[20px] flex-shrink-0"><Sparkline data={spark} color={SPARK_COLOR[tone]} /></div>
+        )}
+      </div>
     </Card>
+  )
+}
+
+// Lightweight inline-SVG sparkline (no per-card Recharts overhead).
+function Sparkline({ data, color }) {
+  const nums = data.map(Number).filter(v => Number.isFinite(v))
+  if (nums.length < 2) return null
+  const w = 62, h = 20, pad = 1.5
+  const min = Math.min(...nums), max = Math.max(...nums)
+  const range = (max - min) || 1
+  const x = i => (i / (nums.length - 1)) * w
+  const y = v => h - pad - ((v - min) / range) * (h - pad * 2)
+  const line = nums.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)} ${y(v).toFixed(1)}`).join(' ')
+  const area = `${line} L${w} ${h} L0 ${h} Z`
+  const gid = `spk-${color.slice(1)}`
+  return (
+    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" className="block w-full h-full">
+      <defs>
+        <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={color} stopOpacity="0.20" />
+          <stop offset="100%" stopColor={color} stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      <path d={area} fill={`url(#${gid})`} />
+      <path d={line} fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+    </svg>
   )
 }
 
