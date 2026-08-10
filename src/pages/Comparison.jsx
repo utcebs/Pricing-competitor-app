@@ -26,6 +26,7 @@ export default function Comparison() {
   const [suspectCps, setSuspectCps] = useState({})       // { competitor_product_id: true } — a recent reading was flagged
   const [dataFreshAt, setDataFreshAt] = useState(null)   // newest captured_at across all prices
   const [latestStock, setLatestStock] = useState({})     // { competitor_product_id: boolean in_stock }
+  const [stockLoaded, setStockLoaded] = useState(false)  // guard: don't call links "invalid" until stock has loaded
   const [priceLoading, setPriceLoading] = useState(false)
   const [priceErr, setPriceErr] = useState('')
   const [refreshTick, setRefreshTick] = useState(0)   // bump to re-run the price query
@@ -58,9 +59,10 @@ export default function Comparison() {
   // Latest STOCK status per competitor_product — same server-side approach.
   useEffect(() => {
     let cancelled = false
+    setStockLoaded(false)
     fetchLatestStock(60)
-      .then(stock => { if (!cancelled) setLatestStock(stock) })
-      .catch(() => {})   // stock is a nice-to-have; never block the grid
+      .then(stock => { if (!cancelled) { setLatestStock(stock); setStockLoaded(true) } })
+      .catch(() => { if (!cancelled) setStockLoaded(true) })   // stock is a nice-to-have; never block the grid
     return () => { cancelled = true }
   }, [refreshTick])
 
@@ -414,20 +416,25 @@ export default function Comparison() {
                       if (!match) return <Td key={c.id} className="text-right"><span className="text-ink-200">·</span></Td>
                       const px = match.effPrice
                       if (px == null) {
-                        // No current price. Distinguish three cases:
+                        // No current price. Distinguish cases:
+                        //  • stock still loading → neutral "…" (never flash "invalid")
                         //  • we have a stock reading → product EXISTS but no price → "out of stock"
                         //  • scraped, no stock reading → dead/removed URL → "invalid link"
                         //  • never scraped → "no data"
                         const stock = latestStock[match.cp.id]
                         const knownStock = stock === true || stock === false
                         const scraped = !!match.cp.last_seen_at
-                        const label = knownStock ? 'out of stock' : scraped ? 'invalid link' : 'no data'
+                        const label = knownStock ? 'out of stock'
+                          : !stockLoaded ? '…'
+                            : scraped ? 'invalid link' : 'no data'
                         const cls = knownStock ? 'font-medium text-amber-600'
-                          : scraped ? 'font-medium text-red-500'
-                            : 'text-ink-400 italic hover:text-brand-700'
+                          : !stockLoaded ? 'text-ink-300'
+                            : scraped ? 'font-medium text-red-500'
+                              : 'text-ink-400 italic hover:text-brand-700'
                         const title = knownStock ? 'Valid product, currently out of stock (no price). Click to open.'
-                          : scraped ? 'Invalid or removed — no product on the competitor page. Click to open.'
-                            : 'Not scraped yet. Click to open.'
+                          : !stockLoaded ? 'Loading stock status…'
+                            : scraped ? 'Invalid or removed — no product on the competitor page. Click to open.'
+                              : 'Not scraped yet. Click to open.'
                         return (
                           <Td key={c.id} className="text-right">
                             <a href={match.cp.url} target="_blank" rel="noopener noreferrer" title={title}

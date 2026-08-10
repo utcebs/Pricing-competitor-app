@@ -18,13 +18,17 @@
 -- ============================================================
 
 -- Matching index for the stock dedup (price side already exists in phase1-perf).
-CREATE INDEX IF NOT EXISTS idx_stock_history_cp_captured
+CREATE INDEX IF NOT EXISTS idx_stock_history_cp_captured1
   ON public.stock_history(competitor_product_id, captured_at DESC);
 
 -- ── Latest price per competitor_product ─────────────────────
--- Returns the latest NON-suspect price per cp, plus is_suspect = whether the
--- single most-recent reading (suspect or not) was flagged — so the UI can show
--- the ⚠ marker without downloading history.
+-- Index-optimal: ONE DISTINCT ON straight off the
+-- (competitor_product_id, captured_at DESC) index — a skip scan that reads a
+-- row per cp instead of materialising the whole 60-day window. The earlier
+-- two-CTE version was referenced twice, so Postgres materialised + sorted the
+-- entire window (slow as history grows — this was the Dashboard/Comparison lag).
+-- We skip suspect readings for the price and drop the ⚠ "recent reading looked
+-- wrong" flag (minor UI detail) in exchange for a large speed-up.
 CREATE OR REPLACE FUNCTION public.get_latest_prices(days integer DEFAULT 60)
 RETURNS TABLE (
   competitor_product_id bigint,
@@ -38,30 +42,12 @@ STABLE
 SECURITY INVOKER
 SET search_path = public
 AS $$
-  WITH win AS (
-    SELECT competitor_product_id, price, currency_code, captured_at,
-           COALESCE(is_suspect, false) AS is_suspect
-    FROM public.price_history
-    WHERE captured_at >= now() - make_interval(days => days)
-  ),
-  good AS (   -- latest reading that was NOT flagged suspect
-    SELECT DISTINCT ON (competitor_product_id)
-           competitor_product_id, price, currency_code, captured_at
-    FROM win
-    WHERE is_suspect = false
-    ORDER BY competitor_product_id, captured_at DESC
-  ),
-  newest AS ( -- was the single most-recent reading flagged?
-    SELECT DISTINCT ON (competitor_product_id)
-           competitor_product_id, is_suspect
-    FROM win
-    ORDER BY competitor_product_id, captured_at DESC
-  )
-  SELECT g.competitor_product_id, g.price, g.currency_code, g.captured_at,
-         COALESCE(n.is_suspect, false)
-  FROM good g
-  LEFT JOIN newest n USING (competitor_product_id)
-  ORDER BY g.competitor_product_id;   -- stable order so client range() paging is deterministic
+  SELECT DISTINCT ON (competitor_product_id)
+         competitor_product_id, price, currency_code, captured_at, false
+  FROM public.price_history
+  WHERE captured_at >= now() - make_interval(days => days)
+    AND COALESCE(is_suspect, false) = false
+  ORDER BY competitor_product_id, captured_at DESC;   -- stable order → deterministic range() paging
 $$;
 
 -- ── Latest stock status per competitor_product ──────────────
