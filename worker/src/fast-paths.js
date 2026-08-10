@@ -137,11 +137,21 @@ async function fastScrapeXcite(url) {
 const BEST_OCC = 'https://mrflex.best.com.kw/occ/v2/best/products'
 const BEST_MEDIA_HOST = 'https://mrflex.best.com.kw'
 
+// Best uses TWO product-URL shapes; support both:
+//   A) /en/product/{CODE}/{slug}     → code is the segment right after "product"
+//   B) /en/.../p/{CODE}              → code is everything after "/p/"
+//      (resolved OCC codes can contain "/", so B keeps the whole tail)
 function bestProductCode(url) {
+  let path
+  try { path = new URL(url).pathname } catch { path = url }
+  const a = path.match(/\/product\/([^/?#]+)/i)
+  if (a) return decodeURIComponent(a[1]) || null
   const after = url.split(/\/p\//i)[1]
-  if (!after) return null
-  const code = decodeURIComponent(after.split(/[?#]/)[0].replace(/\/+$/, ''))
-  return code || null
+  if (after) {
+    const code = decodeURIComponent(after.split(/[?#]/)[0].replace(/\/+$/, ''))
+    return code || null
+  }
+  return null
 }
 
 async function occGet(path) {
