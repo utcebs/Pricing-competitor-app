@@ -96,13 +96,28 @@ export default function Products() {
     })
   }, [products, q, catFilter, brandFilter, trackingFilter, linkCounts])
 
-  // Perf guard — DOM chokes past ~500 rows of a rich table with images.
-  // Cap render and prompt filtering. (True virtualization is a follow-up
-  // when it becomes needed; capping handles the free-tier / early-scale
-  // path without introducing table-layout complexity.)
-  const RENDER_CAP = 300
-  const capped = filtered.length > RENDER_CAP
-  const visibleRows = capped ? filtered.slice(0, RENDER_CAP) : filtered
+  // Progressive rendering — paint in batches instead of all rows at once (a
+  // rich table with images chokes the DOM past ~500). NOTHING is hidden: the
+  // batch grows as you scroll (IntersectionObserver on a sentinel) or via a
+  // "Load more" button. Resets to the first batch whenever the filters change.
+  const RENDER_BATCH = 100
+  const [renderLimit, setRenderLimit] = useState(RENDER_BATCH)
+  useEffect(() => { setRenderLimit(RENDER_BATCH) }, [q, catFilter, brandFilter, trackingFilter])
+  const visibleRows = filtered.slice(0, renderLimit)
+  const hasMore = filtered.length > renderLimit
+
+  const loadMoreRef = useRef(null)
+  useEffect(() => {
+    if (!hasMore) return
+    const el = loadMoreRef.current
+    if (!el) return
+    const io = new IntersectionObserver(
+      entries => { if (entries[0]?.isIntersecting) setRenderLimit(n => n + RENDER_BATCH) },
+      { rootMargin: '600px' },
+    )
+    io.observe(el)
+    return () => io.disconnect()
+  }, [hasMore, renderLimit])
 
   // ── Bulk selection ────────────────────────────────────────────
   // Prune selection to what's currently visible so stale ids from a
@@ -228,21 +243,18 @@ export default function Products() {
         </select>
       </div>
 
-      {/* Result count strip when filters active */}
-      {(q || catFilter !== 'all' || brandFilter !== 'all' || trackingFilter !== 'all') && (
+      {/* Result count strip */}
+      {(q || catFilter !== 'all' || brandFilter !== 'all' || trackingFilter !== 'all' || filtered.length !== products.length) && (
         <div className="text-[11.5px] text-ink-500 mb-3">
-          Showing <span className="font-semibold text-ink-800">{visibleRows.length}</span>
-          {capped && ` of ${filtered.length} matching`}
-          {!capped && filtered.length !== products.length && ` of ${products.length}`} products
-          <button onClick={() => { setQ(''); setCatFilter('all'); setBrandFilter('all'); setTrackingFilter('all') }}
-            className="ml-3 text-brand-700 hover:underline font-medium">
-            Clear filters
-          </button>
-        </div>
-      )}
-      {capped && (
-        <div className="mb-3 text-[11.5px] px-3 py-2 bg-amber-50 border border-amber-100 rounded-lg text-amber-800 inline-flex items-center gap-2">
-          Showing first {RENDER_CAP} rows of {filtered.length}. Filter above to narrow down.
+          Showing <span className="font-semibold text-ink-800">{visibleRows.length}</span> of{' '}
+          <span className="font-semibold text-ink-800">{filtered.length}</span>
+          {filtered.length !== products.length && ` matching`} products
+          {(q || catFilter !== 'all' || brandFilter !== 'all' || trackingFilter !== 'all') && (
+            <button onClick={() => { setQ(''); setCatFilter('all'); setBrandFilter('all'); setTrackingFilter('all') }}
+              className="ml-3 text-brand-700 hover:underline font-medium">
+              Clear filters
+            </button>
+          )}
         </div>
       )}
 
@@ -370,6 +382,13 @@ export default function Products() {
                 )})}
               </tbody>
             </table>
+            {hasMore && (
+              <div ref={loadMoreRef} className="flex items-center justify-center py-4 border-t border-ink-100">
+                <Button variant="secondary" onClick={() => setRenderLimit(n => n + RENDER_BATCH)}>
+                  Load more — {filtered.length - renderLimit} remaining
+                </Button>
+              </div>
+            )}
           </div>
         )}
       </Card>
