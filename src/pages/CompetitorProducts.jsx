@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import {
   Plus, Pencil, Trash2, Link2, ExternalLink, Search, Upload,
   ChevronRight, ChevronDown, FolderTree, Package, Check, X, Sparkles,
@@ -39,6 +39,9 @@ export default function CompetitorProducts() {
   const [bulkOpen, setBulkOpen] = useState(false)
   const [expandedCats, setExpandedCats] = useState({})   // categoryId → bool
   const [expandedProducts, setExpandedProducts] = useState({})  // productId → bool
+  const RENDER_BATCH = 100
+  const [renderLimit, setRenderLimit] = useState(RENDER_BATCH)
+  useEffect(() => { setRenderLimit(RENDER_BATCH) }, [search, filterCompetitor])
 
   const compById = useMemo(() => Object.fromEntries(competitors.map(c => [c.id, c])), [competitors])
   const catById  = useMemo(() => Object.fromEntries(categories.map(c => [c.id, c])), [categories])
@@ -91,6 +94,36 @@ export default function CompetitorProducts() {
     })
   }, [products, catById, linksByProduct, search, filterCompetitor])
 
+  // Progressive rendering — the grouped list can be 500+ product rows, so we
+  // render in batches (grows on scroll / "Load more"). Walk the sorted groups
+  // and include products up to the current budget; nothing is hidden.
+  const totalFiltered = useMemo(() => grouped.reduce((s, g) => s + g.products.length, 0), [grouped])
+  const visibleGroups = useMemo(() => {
+    let budget = renderLimit
+    const out = []
+    for (const g of grouped) {
+      if (budget <= 0) break
+      const prods = g.products.slice(0, budget)
+      budget -= prods.length
+      out.push({ ...g, products: prods, total: g.products.length })
+    }
+    return out
+  }, [grouped, renderLimit])
+  const hasMore = totalFiltered > renderLimit
+
+  const loadMoreRef = useRef(null)
+  useEffect(() => {
+    if (!hasMore) return
+    const el = loadMoreRef.current
+    if (!el) return
+    const io = new IntersectionObserver(
+      entries => { if (entries[0]?.isIntersecting) setRenderLimit(n => n + RENDER_BATCH) },
+      { rootMargin: '600px' },
+    )
+    io.observe(el)
+    return () => io.disconnect()
+  }, [hasMore, renderLimit])
+
   const toggleCat = (id) => setExpandedCats(m => ({ ...m, [id ?? 'uncat']: !m[id ?? 'uncat'] }))
   const toggleProd = (id) => setExpandedProducts(m => ({ ...m, [id]: !m[id] }))
   const isCatOpen = (id) => expandedCats[id ?? 'uncat'] !== false   // default open
@@ -137,7 +170,7 @@ export default function CompetitorProducts() {
         </Card>
       ) : (
         <div className="space-y-3">
-          {grouped.map(group => (
+          {visibleGroups.map(group => (
             <CategoryGroup
               key={group.categoryId ?? 'uncat'}
               group={group}
@@ -164,6 +197,13 @@ export default function CompetitorProducts() {
               onLinkUpdated={refresh}
             />
           ))}
+          {hasMore && (
+            <div ref={loadMoreRef} className="flex items-center justify-center py-4">
+              <Button variant="secondary" onClick={() => setRenderLimit(n => n + RENDER_BATCH)}>
+                Load more — {totalFiltered - renderLimit} remaining
+              </Button>
+            </div>
+          )}
         </div>
       )}
 
@@ -254,7 +294,7 @@ function CategoryGroup({ group, linksByProduct, competitors, compById,
               {group.name}
             </div>
             <div className="text-[11px] text-ink-500 mt-0.5">
-              {group.products.length} product{group.products.length === 1 ? '' : 's'} · {totalLinks} link{totalLinks === 1 ? '' : 's'}
+              {(group.total ?? group.products.length)} product{(group.total ?? group.products.length) === 1 ? '' : 's'} · {totalLinks} link{totalLinks === 1 ? '' : 's'}
             </div>
           </div>
         </div>
