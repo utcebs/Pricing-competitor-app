@@ -119,11 +119,15 @@ async function fastScrapeXcite(url) {
 
   // meta.product IS present (Xcite has this SKU) but there's no price → it's a
   // real product that's out of stock / discontinued: the page opens, it's not
-  // a 404. Show "out of stock", NOT "invalid link". Genuinely dead URLs have no
-  // meta.product at all (a 404 shell) and already returned null above.
-  // Discontinued items sometimes show the numeric SKU as their name — that's
-  // still a valid product, so we do NOT require the name to contain letters.
-  return { price: null, inStock: inStock ?? false, exists: true, imageUrl, name: name || null }
+  // a 404. Show "out of stock"/"discontinued", NOT "invalid link". Genuinely
+  // dead URLs have no meta.product at all (a 404 shell) and already returned
+  // null above. Discontinued items sometimes show the numeric SKU as their
+  // name — that's still a valid product, so we don't require letters in it.
+  return {
+    price: null, inStock: inStock ?? false, exists: true,
+    discontinued: /discontinued/i.test(status),
+    imageUrl, name: name || null,
+  }
 }
 
 // ── Best Al-Yousifi (best.com.kw) ─────────────────────────────────

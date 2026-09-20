@@ -81,7 +81,7 @@ async function processOneUrl(cp, ctx, run, config, userPriceSel, userStockSel, c
             source: 'scrape', scrape_run_id: run.id,
           })
         }
-        const cpUpdate = { last_seen_at: new Date().toISOString() }
+        const cpUpdate = { last_seen_at: new Date().toISOString(), scrape_status: 'priced' }
         if (result.imageUrl) cpUpdate.image_url = result.imageUrl
         await supabase.from('competitor_products').update(cpUpdate).eq('id', cp.id)
         if (result.imageUrl && cp.product_id) {
@@ -110,17 +110,22 @@ async function processOneUrl(cp, ctx, run, config, userPriceSel, userStockSel, c
             source: 'scrape', scrape_run_id: run.id,
           })
         }
-        const cpUpdate = { last_seen_at: new Date().toISOString() }
+        const cpUpdate = {
+          last_seen_at: new Date().toISOString(),
+          scrape_status: result.discontinued ? 'discontinued' : 'out_of_stock',
+        }
         if (result.imageUrl) cpUpdate.image_url = result.imageUrl
         await supabase.from('competitor_products').update(cpUpdate).eq('id', cp.id)
         await supabase.from('scrape_jobs').insert({
           scrape_run_id: run.id, competitor_product_id: cp.id, status: 'ok',
           price_extracted: null, in_stock_extracted: result.inStock ?? null,
-          error_message: 'Valid product, no current price (out of stock / discontinued)',
+          error_message: result.discontinued
+            ? 'Valid product, discontinued (no price)'
+            : 'Valid product, no current price (out of stock)',
           duration_ms: Date.now() - started,
         })
         counters.scraped++
-        console.log(`[scraper] ○ ${cp.name}: valid, no price (${fp.name}, stock=${result.inStock})`)
+        console.log(`[scraper] ○ ${cp.name}: valid, no price (${fp.name}, ${result.discontinued ? 'discontinued' : 'stock=' + result.inStock})`)
         return
       }
       // No price and product doesn't "exist".
@@ -135,7 +140,7 @@ async function processOneUrl(cp, ctx, run, config, userPriceSel, userStockSel, c
         // browser can't find what the source says is gone, and per-URL Chromium
         // launches OOM-ed the 512MB worker).
         await supabase.from('competitor_products')
-          .update({ last_seen_at: new Date().toISOString() }).eq('id', cp.id)
+          .update({ last_seen_at: new Date().toISOString(), scrape_status: 'not_found' }).eq('id', cp.id)
         await supabase.from('scrape_jobs').insert({
           scrape_run_id: run.id, competitor_product_id: cp.id, status: 'not_found',
           error_message: `Fast-path (${fp.name}): product not found — URL invalid or removed`,
@@ -227,7 +232,7 @@ async function processOneUrl(cp, ctx, run, config, userPriceSel, userStockSel, c
         error_message: `Product page not found (title: "${pageTitle.slice(0, 80)}") — URL likely invalid/expired`,
         duration_ms: Date.now() - started,
       })
-      await supabase.from('competitor_products').update({ last_seen_at: new Date().toISOString() }).eq('id', cp.id)
+      await supabase.from('competitor_products').update({ last_seen_at: new Date().toISOString(), scrape_status: 'not_found' }).eq('id', cp.id)
       counters.notFound++
       console.log(`[scraper] ✗ ${cp.name}: soft-404, skipped`)
       return
@@ -259,7 +264,10 @@ async function processOneUrl(cp, ctx, run, config, userPriceSel, userStockSel, c
         source: 'scrape', scrape_run_id: run.id,
       })
     }
-    const cpUpdate = { last_seen_at: new Date().toISOString() }
+    const cpUpdate = {
+      last_seen_at: new Date().toISOString(),
+      scrape_status: price != null ? 'priced' : inStock !== null ? 'out_of_stock' : 'not_found',
+    }
     if (imageUrl) cpUpdate.image_url = imageUrl
     await supabase.from('competitor_products').update(cpUpdate).eq('id', cp.id)
     if (imageUrl && cp.product_id) {
