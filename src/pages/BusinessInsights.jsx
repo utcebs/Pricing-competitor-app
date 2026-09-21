@@ -23,12 +23,14 @@ export default function BusinessInsights() {
 
   const [latestPrices, setLatestPrices] = useState({})   // cp_id → { price, captured_at }
   const [priceHistory, setPriceHistory] = useState([])   // recent moves (7-day window)
+  const [pricesLoaded, setPricesLoaded] = useState(false) // gate: cards need prices before they mean anything
 
   // Latest price per competitor_product — server-side DISTINCT ON RPC.
   useEffect(() => {
     fetchLatestPrices(60)
       .then(({ prices }) => setLatestPrices(prices))
       .catch(() => setLatestPrices({}))
+      .finally(() => setPricesLoaded(true))
   }, [])
 
   // Bounded recent history for "who's driving the market" move detection.
@@ -148,7 +150,7 @@ export default function BusinessInsights() {
         subtitle="The four questions that turn competitor prices into decisions — priorities, upside, market intelligence, and today's action queue."
       />
 
-      {loading ? <LoadingBlock text="Building insights" /> : (
+      {(loading || !pricesLoaded) ? <LoadingBlock text="Building insights" /> : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <AnswerCard
             kicker="Priority"
