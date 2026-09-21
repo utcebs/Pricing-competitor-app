@@ -2,9 +2,8 @@ import { useEffect, useState, useMemo } from 'react'
 import { NavLink } from 'react-router-dom'
 import { CheckCircle2, ArrowRight, ArrowUpRight, ArrowDownRight } from 'lucide-react'
 import { supabase } from '../supabaseClient'
-import { useTable, fetchLatestPrices } from '../lib/db'
 import { computeSuggestion } from './Dashboard'
-import { PageHeader, Card, LoadingBlock } from '../components/UI'
+import { PageHeader, Card } from '../components/UI'
 
 /**
  * Business Insights — the four "answer cards" that used to live on the
@@ -17,150 +16,75 @@ import { PageHeader, Card, LoadingBlock } from '../components/UI'
  * per-product intelligence roll-up.
  */
 export default function BusinessInsights() {
-  const { rows: products, loading } = useTable('products', { order: ['name', { ascending: true }] })
-  const { rows: competitors } = useTable('competitors', { eq: ['is_active', true] })
-  const { rows: cps } = useTable('competitor_products', { eq: ['is_active', true], select: 'id, product_id, competitor_id' })
+  const [data, setData] = useState(null)     // { products, drivers } from the RPC
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
 
-  const [latestPrices, setLatestPrices] = useState({})   // cp_id → { price, captured_at }
-  const [priceHistory, setPriceHistory] = useState([])   // recent moves (7-day window)
-  const [pricesLoaded, setPricesLoaded] = useState(false) // gate: cards need prices before they mean anything
-
-  // Latest price per competitor_product — server-side DISTINCT ON RPC.
+  // ONE round trip: get_business_insights() aggregates everything in Postgres
+  // and returns a compact payload, instead of downloading the whole catalogue
+  // (~500 products + ~1500 cps + latest prices + 1000 history rows) just to
+  // compute four small lists in the browser.
   useEffect(() => {
-    fetchLatestPrices(60)
-      .then(({ prices }) => setLatestPrices(prices))
-      .catch(() => setLatestPrices({}))
-      .finally(() => setPricesLoaded(true))
+    let cancelled = false
+    supabase.rpc('get_business_insights')
+      .then(({ data, error }) => {
+        if (cancelled) return
+        if (error) setError(error.message)
+        else setData(data || { products: [], drivers: [] })
+      })
+      .catch(e => { if (!cancelled) setError(e.message || 'Failed to load') })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
   }, [])
 
-  // Bounded recent history for "who's driving the market" move detection.
-  // Plain columns only — no nested competitor joins (slow); we map
-  // competitor_product_id → competitor_id client-side from the cps list.
-  useEffect(() => {
-    const from = new Date(); from.setDate(from.getDate() - 7)
-    supabase.from('price_history')
-      .select('competitor_product_id, price, captured_at')
-      .gte('captured_at', from.toISOString())
-      .order('captured_at', { ascending: false })
-      .limit(1000)
-      .then(({ data }) => setPriceHistory(data || []))
-  }, [])
-
-  // Index cps by product_id once (O(cps)) so productIntel is O(products) instead
-  // of O(products × cps) — the nested filter was the main client-side lag.
-  const cpsByProduct = useMemo(() => {
-    const m = new Map()
-    for (const cp of cps) {
-      if (cp.product_id == null) continue
-      let arr = m.get(cp.product_id)
-      if (!arr) { arr = []; m.set(cp.product_id, arr) }
-      arr.push(cp)
+  // Map the compact RPC rows into the shape the cards expect. The price
+  // SUGGESTION stays in JS (computeSuggestion) — one source of truth, and it
+  // keeps the Priority card's rich floor/margin detail.
+  const intel = useMemo(() => (data?.products || []).map(p => {
+    const yourPrice = p.your_price != null ? Number(p.your_price) : null
+    const minRival  = p.min_rival  != null ? Number(p.min_rival)  : null
+    const avgRival  = p.avg_rival  != null ? Number(p.avg_rival)  : null
+    const costPrice = p.cost       != null ? Number(p.cost)       : null
+    const targetMarginPct = p.margin    != null ? Number(p.margin)    : null
+    const minPriceFloor   = p.min_price != null ? Number(p.min_price) : null
+    const gapVsMinPct = (yourPrice != null && minRival != null) ? ((yourPrice - minRival) / minRival) * 100 : null
+    const gapVsAvgPct = (yourPrice != null && avgRival != null) ? ((yourPrice - avgRival) / avgRival) * 100 : null
+    return {
+      product: { id: p.id, name: p.name, sku: p.sku },
+      yourPrice, minRival, avgRival, gapVsMinPct, gapVsAvgPct,
+      costPrice, targetMarginPct, minPriceFloor,
+      cheapestLink: { competitor: { name: p.cheapest_name } },
+      position: p.position,
+      suggestion: computeSuggestion({ minRival, costPrice, targetMarginPct, minPriceFloor }),
     }
-    return m
-  }, [cps])
-  // cp_id → competitor_id, for mapping slimmed price_history rows.
-  const competitorByCp = useMemo(() => {
-    const m = {}
-    for (const cp of cps) m[cp.id] = cp.competitor_id
-    return m
-  }, [cps])
+  }), [data])
 
-  // ── Per-product intelligence (same roll-up as the Dashboard) ──
-  const productIntel = useMemo(() => {
-    const compById = Object.fromEntries(competitors.map(c => [c.id, c]))
-    return products.map(p => {
-      const productLinks = (cpsByProduct.get(p.id) || [])
-        .map(cp => ({ cp, competitor: compById[cp.competitor_id], latest: latestPrices[cp.id] }))
-      const priced = productLinks.filter(l => l.latest?.price != null)
-      const rivalPrices = priced.map(l => Number(l.latest.price))
-      const minRival = rivalPrices.length ? Math.min(...rivalPrices) : null
-      const avgRival = rivalPrices.length ? rivalPrices.reduce((a, b) => a + b, 0) / rivalPrices.length : null
-      const yourPrice = p.current_price != null ? Number(p.current_price) : null
-      const minPriceFloor = p.min_price != null ? Number(p.min_price) : null
-      const costPrice = p.cost_price != null ? Number(p.cost_price) : null
-      const targetMarginPct = p.target_margin != null ? Number(p.target_margin) : null
-      const gapVsMinPct = (yourPrice != null && minRival != null) ? ((yourPrice - minRival) / minRival) * 100 : null
-      const gapVsAvgPct = (yourPrice != null && avgRival != null) ? ((yourPrice - avgRival) / avgRival) * 100 : null
-      const cheapestLink = priced.reduce((best, cur) =>
-        !best || Number(cur.latest.price) < Number(best.latest.price) ? cur : best, null)
-      let position = null
-      if (yourPrice != null && rivalPrices.length > 0) {
-        if (gapVsMinPct <= -0.001) position = 'cheapest'
-        else if (gapVsMinPct > 1) position = 'above'
-        else if (Math.abs(gapVsMinPct) <= 1) position = 'match'
-        else if (gapVsAvgPct < -1) position = 'below'
-        else position = 'match'
-      }
-      const suggestion = computeSuggestion({ minRival, costPrice, targetMarginPct, minPriceFloor })
-      return {
-        product: p, rivalCount: priced.length, linkCount: productLinks.length,
-        yourPrice, minRival, avgRival, minPriceFloor, costPrice, targetMarginPct,
-        gapVsMinPct, gapVsAvgPct, cheapestLink, position, suggestion,
-      }
-    })
-  }, [products, cpsByProduct, latestPrices, competitors])
-
-  // Actionable = suggested price differs from current by >1% (either direction)
-  const actionable = productIntel.filter(pi =>
-    pi.suggestion && pi.yourPrice != null
-    && Math.abs(pi.suggestion.price - pi.yourPrice) / pi.yourPrice > 0.01
-  )
-
-  // (1) Priority — where am I losing? Above-market, ranked by revenue impact.
-  const losingList = productIntel
+  // (1) Priority — above-market, ranked by revenue impact
+  const losingList = useMemo(() => intel
     .filter(pi => pi.position === 'above')
     .map(pi => ({ ...pi, impact: (pi.gapVsMinPct || 0) * (pi.yourPrice || 0) }))
-    .sort((a, b) => b.impact - a.impact)
-    .slice(0, 5)
+    .sort((a, b) => b.impact - a.impact).slice(0, 5), [intel])
 
-  // (2) Upside — cheapest AND well below average (room to raise price, stay leader)
-  const marginList = productIntel
+  // (2) Upside — cheapest AND well below average
+  const marginList = useMemo(() => intel
     .filter(pi => pi.position === 'cheapest' && pi.gapVsAvgPct != null && pi.gapVsAvgPct < -3)
-    .sort((a, b) => (a.gapVsAvgPct || 0) - (b.gapVsAvgPct || 0))
-    .slice(0, 5)
+    .sort((a, b) => (a.gapVsAvgPct || 0) - (b.gapVsAvgPct || 0)).slice(0, 5), [intel])
 
-  // (3) Intelligence — per competitor: cheapest-wins + price moves in the last 7d
-  const marketDrivers = useMemo(() => {
-    const wins = {}, moves = {}, coverage = {}
-    for (const pi of productIntel) {
-      if (pi.cheapestLink?.competitor?.id != null) {
-        const cid = pi.cheapestLink.competitor.id
-        wins[cid] = (wins[cid] || 0) + 1
-      }
-      for (const cp of (cpsByProduct.get(pi.product.id) || [])) {
-        coverage[cp.competitor_id] = (coverage[cp.competitor_id] || 0) + 1
-      }
-    }
-    const weekAgo = Date.now() - 7 * 86400 * 1000
-    const groups = {}
-    for (const row of priceHistory) {
-      const arr = groups[row.competitor_product_id] || (groups[row.competitor_product_id] = [])
-      arr.push(row)
-    }
-    for (const [cpId, rows] of Object.entries(groups)) {
-      if (rows.length < 2) continue
-      const cid = competitorByCp[cpId]
-      if (cid == null) continue
-      const [latest, prior] = rows
-      if (new Date(latest.captured_at).getTime() < weekAgo) continue
-      if (Number(latest.price) !== Number(prior.price)) moves[cid] = (moves[cid] || 0) + 1
-    }
-    return competitors
-      .map(c => ({ competitor: c, wins: wins[c.id] || 0, moves7d: moves[c.id] || 0, coverage: coverage[c.id] || 0 }))
-      .filter(r => r.wins > 0 || r.moves7d > 0)
-      .sort((a, b) => (b.wins * 2 + b.moves7d) - (a.wins * 2 + a.moves7d))
-      .slice(0, 5)
-  }, [productIntel, priceHistory, competitors, cpsByProduct, competitorByCp])
+  // (3) Intelligence — competitors by cheapest-wins + 7-day moves (server-computed)
+  const marketDrivers = useMemo(() => (data?.drivers || []).map(d => ({
+    competitor: { id: d.id, name: d.name, domain: d.domain, logo_url: d.logo_url },
+    wins: d.wins, moves7d: d.moves7d, coverage: d.coverage,
+  })), [data])
 
-  // (4) Action queue — merged actionable list, ranked by absolute price impact
-  const actionQueue = actionable
+  // (4) Action queue — suggested price differs from current by >1%
+  const actionQueue = useMemo(() => intel
+    .filter(pi => pi.suggestion && pi.yourPrice != null
+      && Math.abs(pi.suggestion.price - pi.yourPrice) / pi.yourPrice > 0.01)
     .map(pi => {
       const diff = pi.suggestion.price - pi.yourPrice
-      const diffPct = (diff / pi.yourPrice) * 100
-      return { ...pi, diff, diffPct, impact: Math.abs(diff) }
+      return { ...pi, diff, diffPct: (diff / pi.yourPrice) * 100, impact: Math.abs(diff) }
     })
-    .sort((a, b) => b.impact - a.impact)
-    .slice(0, 5)
+    .sort((a, b) => b.impact - a.impact).slice(0, 5), [intel])
 
   return (
     <div>
@@ -170,7 +94,10 @@ export default function BusinessInsights() {
         subtitle="The four questions that turn competitor prices into decisions — priorities, upside, market intelligence, and today's action queue."
       />
 
-      {(loading || !pricesLoaded) ? <LoadingBlock text="Building insights" /> : (
+      {loading ? <InsightsSkeleton />
+        : error ? (
+          <Card className="p-8 text-center text-sm text-red-600">Couldn't load insights: {error}</Card>
+        ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <AnswerCard
             kicker="Priority"
@@ -225,6 +152,31 @@ export default function BusinessInsights() {
           </AnswerCard>
         </div>
       )}
+    </div>
+  )
+}
+
+// Skeleton — four card placeholders so the page shows structure instantly
+// instead of a blank spinner (perceived speed).
+function InsightsSkeleton() {
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 animate-pulse">
+      {Array.from({ length: 4 }).map((_, i) => (
+        <Card key={i} className="overflow-hidden">
+          <div className="px-6 py-4 border-b border-ink-100">
+            <div className="h-2.5 w-16 bg-ink-100 rounded mb-2.5" />
+            <div className="h-4 w-40 bg-ink-100 rounded" />
+          </div>
+          <div className="p-6 space-y-3">
+            {Array.from({ length: 4 }).map((_, j) => (
+              <div key={j} className="flex items-center justify-between gap-4">
+                <div className="h-3 bg-ink-100 rounded flex-1" style={{ maxWidth: `${70 - j * 8}%` }} />
+                <div className="h-3 w-10 bg-ink-100 rounded" />
+              </div>
+            ))}
+          </div>
+        </Card>
+      ))}
     </div>
   )
 }
