@@ -1,30 +1,42 @@
 -- ============================================================
 -- get_business_insights() — one call that returns EVERYTHING the Business
--- Insights page needs, computed in Postgres. The page used to download the
--- whole catalogue (~500 products + ~1500 competitor_products + latest prices +
--- 1000 price_history rows) and aggregate in the browser just to show four small
--- lists. Now the database does the aggregation and returns a compact payload in
--- a single round trip.
+-- Insights page needs, computed in Postgres.
 --
--- Returns jsonb:
---   { products: [ per-product intel for products WITH rival prices ],
---     drivers:  [ top-5 competitors by cheapest-wins + 7-day price moves ] }
+-- KEY PERF DECISION: the "current price per competitor_product" is now stored
+-- ON competitor_products (last_price), maintained by the worker each scrape,
+-- so this function NEVER scans the large/growing price_history table for latest
+-- state. It reads ~1500 small cp rows instead. Only the 7-day "moves" feed
+-- still touches price_history (bounded window + captured_at index).
 --
--- The price-SUGGESTION math (margin floors etc.) is deliberately LEFT to the
--- client (computeSuggestion in JS) so it stays the single source of truth and
--- the Priority card keeps its rich detail — this RPC returns the raw inputs
--- (cost/margin/min_price/min_rival) it needs.
---
--- SECURITY INVOKER — respects the caller's RLS, same as direct reads.
+-- Returns jsonb { products: [...], drivers: [...] }. Suggestion math stays in
+-- the client (computeSuggestion). SECURITY INVOKER — caller's RLS applies.
 -- ============================================================
 
--- The 7-day "price moves" scan filters price_history by captured_at ALONE. The
--- existing (competitor_product_id, captured_at) composite index can't serve a
--- date-only range, so without this index that scan reads the WHOLE table and the
--- function times out. This standalone index makes the range fast.
+-- 1. Materialized "current price" columns on competitor_products.
+ALTER TABLE public.competitor_products
+  ADD COLUMN IF NOT EXISTS last_price    numeric,
+  ADD COLUMN IF NOT EXISTS last_price_at timestamptz;
+
+-- 2. One-time backfill: latest non-suspect price per cp. DISTINCT ON uses the
+--    (competitor_product_id, captured_at) index, so this is fast even on a big
+--    history. (Re-runnable; the WHERE skips no-op writes.)
+UPDATE public.competitor_products cp
+SET last_price = lp.price, last_price_at = lp.captured_at
+FROM (
+  SELECT DISTINCT ON (competitor_product_id) competitor_product_id, price, captured_at
+  FROM public.price_history
+  WHERE COALESCE(is_suspect, false) = false
+  ORDER BY competitor_product_id, captured_at DESC
+) lp
+WHERE cp.id = lp.competitor_product_id
+  AND cp.last_price IS DISTINCT FROM lp.price;
+
+-- 3. captured_at index for the 7-day moves scan (date-only range the composite
+--    (cp, captured_at) index can't serve).
 CREATE INDEX IF NOT EXISTS idx_price_history_captured
   ON public.price_history(captured_at DESC);
 
+-- 4. The function — reads last_price directly, no latest-price history scan.
 CREATE OR REPLACE FUNCTION public.get_business_insights()
 RETURNS jsonb
 LANGUAGE sql
@@ -32,20 +44,12 @@ STABLE
 SECURITY INVOKER
 SET search_path = public
 AS $$
-WITH latest AS (   -- latest non-suspect price per competitor_product (60d)
-  SELECT DISTINCT ON (competitor_product_id) competitor_product_id, price
-  FROM public.price_history
-  WHERE captured_at >= now() - interval '60 days'
-    AND COALESCE(is_suspect, false) = false
-  ORDER BY competitor_product_id, captured_at DESC
-),
-links AS (         -- active, linked competitor_products + their latest price
-  SELECT cp.id AS cp_id, cp.product_id, cp.competitor_id, l.price
+WITH links AS (   -- active linked cps + their MATERIALIZED latest price
+  SELECT cp.id AS cp_id, cp.product_id, cp.competitor_id, cp.last_price AS price
   FROM public.competitor_products cp
-  LEFT JOIN latest l ON l.competitor_product_id = cp.id
   WHERE cp.is_active AND cp.product_id IS NOT NULL
 ),
-agg AS (           -- per product: cheapest/avg rival + cheapest competitor
+agg AS (          -- per product: cheapest/avg rival + cheapest competitor
   SELECT p.id, p.name, p.sku,
     p.current_price::numeric AS your_price,
     p.cost_price::numeric    AS cost,
@@ -61,7 +65,7 @@ agg AS (           -- per product: cheapest/avg rival + cheapest competitor
   GROUP BY p.id
   HAVING COUNT(lk.price) > 0
 ),
-intel AS (         -- + market position bucket (mirrors the client logic)
+intel AS (        -- + market position bucket (mirrors the client logic)
   SELECT a.*, c.name AS cheapest_name,
     CASE
       WHEN a.your_price IS NULL THEN NULL
@@ -74,7 +78,7 @@ intel AS (         -- + market position bucket (mirrors the client logic)
   FROM agg a
   LEFT JOIN public.competitors c ON c.id = a.cheapest_id
 ),
-mv AS (            -- last two readings per cp in the past 7 days
+mv AS (           -- last two readings per cp in the past 7 days
   SELECT competitor_product_id,
     (ARRAY_AGG(price ORDER BY captured_at DESC))[1] AS latest_p,
     (ARRAY_AGG(price ORDER BY captured_at DESC))[2] AS prior_p
@@ -107,8 +111,8 @@ SELECT jsonb_build_object(
   'drivers', (
     SELECT COALESCE(jsonb_agg(row_to_json(t)), '[]'::jsonb) FROM (
       SELECT c.id, c.name, c.domain, c.logo_url,
-        COALESCE(w.wins, 0)     AS wins,
-        COALESCE(m.moves7d, 0)  AS moves7d,
+        COALESCE(w.wins, 0)      AS wins,
+        COALESCE(m.moves7d, 0)   AS moves7d,
         COALESCE(cv.coverage, 0) AS coverage
       FROM public.competitors c
       LEFT JOIN wins  w  ON w.competitor_id  = c.id
@@ -123,10 +127,6 @@ SELECT jsonb_build_object(
 $$;
 
 GRANT EXECUTE ON FUNCTION public.get_business_insights() TO anon, authenticated;
-
--- Safety net: allow this one aggregation to run a little longer than the default
--- role statement_timeout on very large histories (the index should keep it well
--- under this, but this prevents a hard timeout error while data grows).
 ALTER FUNCTION public.get_business_insights() SET statement_timeout = '25s';
 
 NOTIFY pgrst, 'reload schema';
