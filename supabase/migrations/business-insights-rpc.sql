@@ -17,6 +17,14 @@
 --
 -- SECURITY INVOKER — respects the caller's RLS, same as direct reads.
 -- ============================================================
+
+-- The 7-day "price moves" scan filters price_history by captured_at ALONE. The
+-- existing (competitor_product_id, captured_at) composite index can't serve a
+-- date-only range, so without this index that scan reads the WHOLE table and the
+-- function times out. This standalone index makes the range fast.
+CREATE INDEX IF NOT EXISTS idx_price_history_captured
+  ON public.price_history(captured_at DESC);
+
 CREATE OR REPLACE FUNCTION public.get_business_insights()
 RETURNS jsonb
 LANGUAGE sql
@@ -115,5 +123,10 @@ SELECT jsonb_build_object(
 $$;
 
 GRANT EXECUTE ON FUNCTION public.get_business_insights() TO anon, authenticated;
+
+-- Safety net: allow this one aggregation to run a little longer than the default
+-- role statement_timeout on very large histories (the index should keep it well
+-- under this, but this prevents a hard timeout error while data grows).
+ALTER FUNCTION public.get_business_insights() SET statement_timeout = '25s';
 
 NOTIFY pgrst, 'reload schema';
