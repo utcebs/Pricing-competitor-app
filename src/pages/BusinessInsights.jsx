@@ -19,7 +19,7 @@ import { PageHeader, Card, LoadingBlock } from '../components/UI'
 export default function BusinessInsights() {
   const { rows: products, loading } = useTable('products', { order: ['name', { ascending: true }] })
   const { rows: competitors } = useTable('competitors', { eq: ['is_active', true] })
-  const { rows: cps } = useTable('competitor_products', { eq: ['is_active', true] })
+  const { rows: cps } = useTable('competitor_products', { eq: ['is_active', true], select: 'id, product_id, competitor_id' })
 
   const [latestPrices, setLatestPrices] = useState({})   // cp_id → { price, captured_at }
   const [priceHistory, setPriceHistory] = useState([])   // recent moves (7-day window)
@@ -34,22 +34,42 @@ export default function BusinessInsights() {
   }, [])
 
   // Bounded recent history for "who's driving the market" move detection.
+  // Plain columns only — no nested competitor joins (slow); we map
+  // competitor_product_id → competitor_id client-side from the cps list.
   useEffect(() => {
     const from = new Date(); from.setDate(from.getDate() - 7)
     supabase.from('price_history')
-      .select('id, competitor_product_id, price, currency_code, captured_at, competitor_products(name, competitor_id, product_id, competitors(name))')
+      .select('competitor_product_id, price, captured_at')
       .gte('captured_at', from.toISOString())
       .order('captured_at', { ascending: false })
       .limit(1000)
       .then(({ data }) => setPriceHistory(data || []))
   }, [])
 
+  // Index cps by product_id once (O(cps)) so productIntel is O(products) instead
+  // of O(products × cps) — the nested filter was the main client-side lag.
+  const cpsByProduct = useMemo(() => {
+    const m = new Map()
+    for (const cp of cps) {
+      if (cp.product_id == null) continue
+      let arr = m.get(cp.product_id)
+      if (!arr) { arr = []; m.set(cp.product_id, arr) }
+      arr.push(cp)
+    }
+    return m
+  }, [cps])
+  // cp_id → competitor_id, for mapping slimmed price_history rows.
+  const competitorByCp = useMemo(() => {
+    const m = {}
+    for (const cp of cps) m[cp.id] = cp.competitor_id
+    return m
+  }, [cps])
+
   // ── Per-product intelligence (same roll-up as the Dashboard) ──
   const productIntel = useMemo(() => {
     const compById = Object.fromEntries(competitors.map(c => [c.id, c]))
     return products.map(p => {
-      const productLinks = cps
-        .filter(cp => cp.product_id === p.id)
+      const productLinks = (cpsByProduct.get(p.id) || [])
         .map(cp => ({ cp, competitor: compById[cp.competitor_id], latest: latestPrices[cp.id] }))
       const priced = productLinks.filter(l => l.latest?.price != null)
       const rivalPrices = priced.map(l => Number(l.latest.price))
@@ -78,7 +98,7 @@ export default function BusinessInsights() {
         gapVsMinPct, gapVsAvgPct, cheapestLink, position, suggestion,
       }
     })
-  }, [products, cps, latestPrices, competitors])
+  }, [products, cpsByProduct, latestPrices, competitors])
 
   // Actionable = suggested price differs from current by >1% (either direction)
   const actionable = productIntel.filter(pi =>
@@ -107,7 +127,7 @@ export default function BusinessInsights() {
         const cid = pi.cheapestLink.competitor.id
         wins[cid] = (wins[cid] || 0) + 1
       }
-      for (const cp of cps.filter(c => c.product_id === pi.product.id)) {
+      for (const cp of (cpsByProduct.get(pi.product.id) || [])) {
         coverage[cp.competitor_id] = (coverage[cp.competitor_id] || 0) + 1
       }
     }
@@ -117,9 +137,9 @@ export default function BusinessInsights() {
       const arr = groups[row.competitor_product_id] || (groups[row.competitor_product_id] = [])
       arr.push(row)
     }
-    for (const rows of Object.values(groups)) {
+    for (const [cpId, rows] of Object.entries(groups)) {
       if (rows.length < 2) continue
-      const cid = rows[0].competitor_products?.competitor_id
+      const cid = competitorByCp[cpId]
       if (cid == null) continue
       const [latest, prior] = rows
       if (new Date(latest.captured_at).getTime() < weekAgo) continue
@@ -130,7 +150,7 @@ export default function BusinessInsights() {
       .filter(r => r.wins > 0 || r.moves7d > 0)
       .sort((a, b) => (b.wins * 2 + b.moves7d) - (a.wins * 2 + a.moves7d))
       .slice(0, 5)
-  }, [productIntel, priceHistory, competitors, cps])
+  }, [productIntel, priceHistory, competitors, cpsByProduct, competitorByCp])
 
   // (4) Action queue — merged actionable list, ranked by absolute price impact
   const actionQueue = actionable
